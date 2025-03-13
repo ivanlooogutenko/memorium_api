@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                   Int           @id @default(autoincrement())
+  username             String        @unique
+  email               String         @unique
+  password_hash       String
+  interface_language_id Int?
+  created_at      DateTime @default(now())
+  modules        Module[]
+  reviews         ReviewLog[]
+  stats             DailyStats[]
+}
+
+model Language {
+  id        Int     @id @default(autoincrement())
+  code      String  @unique
+  name      String
+  iconUrl   String?
+  modules   Module[]
+}
+
+model Module {
+  id           Int      @id @default(autoincrement())
+  user_id      Int
+  language_id  Int
+  title        String
+  description  String?
+  created_at   DateTime @default(now())
+  
+  user         User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  language     Language @relation(fields: [language_id], references: [id])
+  cards        Card[]
+  dailyStats   DailyStats[]  // 👈 добавь это поле здесь
+
+  @@index([user_id])
+  @@index([language_id])
+}
+
+model Card {
+  id             Int      @id @default(autoincrement())
+  module_id      Int
+  front_text     String
+  back_text      String
+  image_url      String?
+  tts_audio_url  String?
+  created_at     DateTime @default(now())
+
+  module         Module @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  examples       CardExample[]
+  schedule       CardSchedule?
+  reviewLogs     ReviewLog[]
+
+  @@unique([module_id, front_text])
+  @@index([module_id])
+}
+
+model CardExample {
+  id               Int     @id @default(autoincrement())
+  card_id          Int
+  example_text     String
+  translation_text String?
+  tts_audio_url   String?
+  example_order    Int     @default(1)
+
+  card            Card @relation(fields: [card_id], references: [id], onDelete: Cascade)
+
+  @@unique([card_id, example_order])
+  @@index([card_id])
+}
+
+enum CardStatus {
+  new
+  learning
+  review
+  unscheduled
+}
+
+model CardSchedule {
+  card_id        Int       @id
+  last_review    DateTime?
+  due_date       DateTime?
+  stability      Float?
+  difficulty     Float
+  review_count   Int     @default(0)
+  lapses         Int     @default(0)
+  status         CardStatus @default(new)
+
+  card           Card @relation(fields: [card_id], references: [id], onDelete: Cascade)
+
+  @@index([due_date])
+}
+
+model ReviewLog {
+  id                Int        @id @default(autoincrement())
+  user_id           Int
+  card_id           Int
+  review_date      DateTime @default(now())
+  state            CardStatus @default(review)
+  score            Int?
+  next_review_date DateTime?
+
+  user            User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  card            Card @relation(fields: [card_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, review_date])
+  @@index([card_id])
+  @@index([state])
+}
+
+model DailyStats {
+  user_id        Int
+  module_id      Int
+  stat_date      DateTime @db.Date
+  new_cards      Int @default(0)
+  repeated_cards Int @default(0)
+  learned_cards  Int @default(0)
+  known_cards    Int @default(0)
+
+  user           User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  module         Module @relation(fields: [module_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, module_id, stat_date])
+  @@index([stat_date])
+}
