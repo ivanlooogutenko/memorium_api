@@ -1,46 +1,60 @@
-import { Controller, Get, Post, Put, Delete, Param } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Query,
+} from '@nestjs/common';
+import { CardsService } from './cards.service';
 
 @Controller('cards')
 export class CardsController {
+  constructor(private readonly cardsService: CardsService) {}
+
   @Get()
   getAllCards() {
-    // Placeholder for getting all cards
-    return { message: 'List of all cards' };
+    return this.cardsService.getAllCards();
   }
 
   @Get(':id')
   getCardById(@Param('id') id: string) {
-    // Placeholder for getting a card by ID
-    return { message: `Card with ID ${id}` };
+    return this.cardsService.getCardById(id);
+  }
+
+  @Get('module/:moduleId')
+  getCardsByModule(@Param('moduleId') moduleId: string) {
+    return this.cardsService.getCardsByModule(moduleId);
   }
 
   @Post()
   createCard() {
-    // Placeholder for creating a card
-    return { message: 'Card created successfully' };
+    return this.cardsService.createCard();
   }
 
   @Put(':id')
   updateCard(@Param('id') id: string) {
-    // Placeholder for updating a card
-    return { message: `Card with ID ${id} updated successfully` };
+    return this.cardsService.updateCard(id);
   }
 
   @Delete(':id')
   deleteCard(@Param('id') id: string) {
-    // Placeholder for deleting a card
-    return { message: `Card with ID ${id} deleted successfully` };
+    return this.cardsService.deleteCard(id);
   }
 
   @Post(':id/image')
   uploadImage(@Param('id') id: string) {
-    // Placeholder for uploading an image
-    return { message: `Image for card with ID ${id} uploaded successfully` };
+    return this.cardsService.uploadImage(id);
   }
 
   @Delete(':id/image')
   deleteImage(@Param('id') id: string) {
-    // Placeholder for deleting an image
-    return { message: `Image for card with ID ${id} deleted successfully` };
+    return this.cardsService.deleteImage(id);
+  }
+
+  @Get('search')
+  searchCards(@Query('query') query: string) {
+    return this.cardsService.searchCards(query);
   }
 }
