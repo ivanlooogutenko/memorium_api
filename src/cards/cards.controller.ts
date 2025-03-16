@@ -66,7 +66,10 @@ export class CardsController {
 
 
   @Put(':id')
-  updateCard(@Param('id') id: string, @Body() updateCardDto: CardDto) {
+  updateCard(
+    @Param('id') id: string, 
+    @Body() updateCardDto: CardDto
+  ) {
     return this.cardsService.updateCard(id, updateCardDto);
   }
 

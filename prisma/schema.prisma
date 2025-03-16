@@ -54,7 +54,7 @@ model Card {
   created_at     DateTime @default(now())
 
   module         Module @relation(fields: [module_id], references: [id], onDelete: Cascade)
-  examples       CardExample[]
+  examples       Example[]
   schedule       CardSchedule?
   reviewLogs     ReviewLog[]
 
@@ -62,7 +62,7 @@ model Card {
   @@index([module_id])
 }
 
-model CardExample {
+model Example {
   id               Int     @id @default(autoincrement())
   card_id          Int
   example_text     String
@@ -80,7 +80,7 @@ enum CardStatus {
   new
   learning
   review
-  unscheduled
+  mastered
 }
 
 model CardSchedule {
@@ -98,13 +98,20 @@ model CardSchedule {
   @@index([due_date])
 }
 
+enum ReviewRating {
+  again
+  hard
+  good
+  easy
+}
+
 model ReviewLog {
   id                Int        @id @default(autoincrement())
   user_id           Int
   card_id           Int
   review_date      DateTime @default(now())
   state            CardStatus @default(review)
-  score            Int?
+  rating           ReviewRating
   next_review_date DateTime?
 
   user            User @relation(fields: [user_id], references: [id], onDelete: Cascade)
