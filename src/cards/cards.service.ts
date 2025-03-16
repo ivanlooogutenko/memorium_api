@@ -44,10 +44,10 @@ export class CardsService {
 
     try {
 
-      const cardId = parseInt(id, 10);
+      const cardIdNum = parseInt(id, 10);
       
       const card = await this.prisma.card.findUnique({
-        where: { id: cardId },
+        where: { id: cardIdNum },
       });
       
       if (!card) {
@@ -123,10 +123,10 @@ export class CardsService {
 
     try {
 
-      const cardId = parseInt(id, 10);
+      const cardIdNum = parseInt(id, 10);
       
       const updatedCard = await this.prisma.card.update({
-        where: { id: cardId },
+        where: { id: cardIdNum },
         data: {
           module_id: parseInt(updateCardDto.module_id, 10),
           front_text: updateCardDto.front_text,
@@ -157,10 +157,10 @@ export class CardsService {
 
     try {
 
-      const cardId = parseInt(id, 10);
+      const cardIdNum = parseInt(id, 10);
 
       const deletedCard = await this.prisma.card.delete({
-        where: { id: cardId },
+        where: { id: cardIdNum },
       });
 
       return {
