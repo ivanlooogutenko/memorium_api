@@ -3,6 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CardDto } from './dto/card.dto';
 import { Prisma } from '@prisma/client';
 
+
+
 @Injectable()
 export class CardsService {
 
@@ -11,13 +13,8 @@ export class CardsService {
   private handleError(prefix: string, error: unknown): never {
 
     const messageError = 
-<<<<<<< HEAD
       error instanceof Error ? 
       error.message : String(error);
-=======
-    error instanceof Error ? 
-    error.message : String(error);
->>>>>>> bfd93aaf42dedcc90b22be4f52da6aa4927cc387
 
     throw new Error(`:( ${prefix}: ${messageError}`);
 
@@ -181,11 +178,8 @@ export class CardsService {
 
   }
 
-<<<<<<< HEAD
 
 
-=======
->>>>>>> bfd93aaf42dedcc90b22be4f52da6aa4927cc387
   async deleteAllCardsByModule(moduleId: string) {
 
     try {
@@ -207,11 +201,7 @@ export class CardsService {
       this.handleError(':( Не удалось удалить все карты модуля', error);
 
     }
-<<<<<<< HEAD
 
-=======
-    
->>>>>>> bfd93aaf42dedcc90b22be4f52da6aa4927cc387
   }
 
 
