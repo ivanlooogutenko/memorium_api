@@ -38,7 +38,7 @@ model Module {
   user         User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
   language     Language @relation(fields: [language_id], references: [id])
   cards        Card[]
-  dailyStats   DailyStats[]  // 👈 добавь это поле здесь
+  dailyStats   DailyStats[]
 
   @@index([user_id])
   @@index([language_id])
