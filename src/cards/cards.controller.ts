@@ -13,6 +13,8 @@ import {
 } from '@nestjs/common';
 import { CardsService } from './cards.service';
 import { CardDto } from './dto/card.dto';
+import { ReviewDto } from './dto/review.dto';
+import { CardStatus } from '@prisma/client';
 
 
 
@@ -94,4 +96,32 @@ export class CardsController {
     return this.cardsService.deleteImage(id);
   }
 
+
+
+  @Get('module/:moduleId/status/:status')
+  getCardsByStatus(
+    @Param('moduleId') moduleId: string,
+    @Param('status') status: CardStatus,
+    @Query('date') date?: string,
+  ) {
+    return this.cardsService.getCardsByStatus(moduleId, status, date);
+  }
+
+
+
+  @Post(':id/review')
+  reviewCard(
+    @Param('id') id: string,
+    @Body() reviewDto: ReviewDto,
+  ) {
+    return this.cardsService.reviewCard(id, reviewDto);
+  }
+
+
+
+  @Post(':id/reset')
+  resetCardProgress(@Param('id') id: string) {
+    return this.cardsService.resetCardProgress(id);
+  }
+  
 }

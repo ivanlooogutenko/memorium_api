@@ -92,6 +92,7 @@ model CardSchedule {
   review_count   Int     @default(0)
   lapses         Int     @default(0)
   status         CardStatus @default(new)
+  learning_step  Int     @default(0)
 
   card           Card @relation(fields: [card_id], references: [id], onDelete: Cascade)
 

@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExampleDto } from './dto/example.dto';
 
+
+
 @Injectable()
 export class ExamplesService {
 
@@ -18,7 +20,7 @@ export class ExamplesService {
   }
 
 
-  
+
   async getExamplesByCardId(cardId: string) {
 
     try {
