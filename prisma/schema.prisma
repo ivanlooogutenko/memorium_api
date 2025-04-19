@@ -14,6 +14,8 @@ model User {
   password_hash       String
   interface_language_id Int?
   created_at      DateTime @default(now())
+  dailyGoal           Int           @default(20)
+  fsrsParams          Json?         @default("{}")
   modules        Module[]
   reviews         ReviewLog[]
   stats             DailyStats[]
@@ -87,12 +89,12 @@ model CardSchedule {
   card_id        Int       @id
   last_review    DateTime?
   due_date       DateTime?
-  stability      Float?
-  difficulty     Float
-  review_count   Int     @default(0)
-  lapses         Int     @default(0)
+  stability      Float     @default(0)
+  difficulty     Float     @default(0)
+  review_count   Int       @default(0)
+  lapses         Int       @default(0)
   status         CardStatus @default(new)
-  learning_step  Int     @default(0)
+  learning_step  Int       @default(0)
 
   card           Card @relation(fields: [card_id], references: [id], onDelete: Cascade)
 
