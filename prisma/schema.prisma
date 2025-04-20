@@ -95,6 +95,9 @@ model CardSchedule {
   lapses         Int       @default(0)
   status         CardStatus @default(new)
   learning_step  Int       @default(0)
+  
+  consecutiveGoodCount Int  @default(0)
+  lastAnsweredGoodDate DateTime?
 
   card           Card @relation(fields: [card_id], references: [id], onDelete: Cascade)
 

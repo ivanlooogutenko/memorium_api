@@ -79,7 +79,7 @@ export class AuthService {
     return null;
   }
 
-  async login(user: any): Promise<{ access_token: string; user: any }> {
+  async login(user: any): Promise<{ access_token: string; user: Omit<User, 'password_hash'> }> {
     console.log(`[AuthService] Entering login method for user: ${user.username}`);
     const payload: TokenPayloadDto = { 
       sub: user.id, 
@@ -89,14 +89,11 @@ export class AuthService {
     try {
       const accessToken = this.jwtService.sign(payload);
       console.log(`[AuthService] JWT generated successfully for user: ${user.username}`);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { password_hash, ...userWithoutPassword } = user; // Убираем хеш пароля
       return {
         access_token: accessToken,
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          interface_language_id: user.interface_language_id,
-        },
+        user: userWithoutPassword // Возвращаем весь объект user без хеша пароля
       };
     } catch (error) {
       console.error(`[AuthService] Error during JWT signing for user: ${user.username}`, error);
@@ -113,6 +110,7 @@ export class AuthService {
         email: true,
         interface_language_id: true,
         created_at: true,
+        dailyGoal: true,
       },
     });
 

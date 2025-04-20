@@ -3,6 +3,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EntityNotFoundException, InvalidOperationException } from '../common/exceptions/business.exceptions';
 import { CardStatus } from '@prisma/client';
 
+export interface WeeklyStatItem {
+  date: string;
+  reviewsCount: number;
+}
+
 @Injectable()
 export class StatsService {
   constructor(private prisma: PrismaService) {}
@@ -448,6 +453,67 @@ export class StatsService {
         throw error;
       }
       throw new InvalidOperationException(`Ошибка при получении статистики модуля: ${error.message}`);
+    }
+  }
+
+  async getWeeklyStats(userId: number, moduleId?: number): Promise<WeeklyStatItem[]> {
+    try {
+      const today = new Date();
+      const sevenDaysAgo = new Date(today);
+      sevenDaysAgo.setDate(today.getDate() - 6); // Включая сегодня, всего 7 дней
+      sevenDaysAgo.setHours(0, 0, 0, 0); // Начало дня
+
+      today.setHours(23, 59, 59, 999); // Конец сегодняшнего дня
+
+      const whereCondition: any = {
+        user_id: userId,
+        review_date: {
+          gte: sevenDaysAgo,
+          lte: today,
+        },
+      };
+
+      if (moduleId) {
+        whereCondition.card = {
+          module_id: moduleId,
+        };
+      }
+
+      const reviews = await this.prisma.reviewLog.groupBy({
+        by: ['review_date'],
+        where: whereCondition,
+        _count: {
+          id: true,
+        },
+        orderBy: {
+          review_date: 'asc',
+        },
+      });
+
+      // Создаем карту для быстрого доступа к данным по дате
+      const reviewsMap = new Map<string, number>();
+      reviews.forEach(review => {
+        const dateString = review.review_date.toISOString().split('T')[0];
+        reviewsMap.set(dateString, review._count.id);
+      });
+
+      // Формируем результат для последних 7 дней
+      const weeklyData: WeeklyStatItem[] = [];
+      const currentDate = new Date(sevenDaysAgo);
+
+      for (let i = 0; i < 7; i++) {
+        const dateString = currentDate.toISOString().split('T')[0];
+        weeklyData.push({
+          date: dateString,
+          reviewsCount: reviewsMap.get(dateString) || 0,
+        });
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      return weeklyData;
+
+    } catch (error) {
+      throw new InvalidOperationException(`Ошибка при получении еженедельной статистики: ${error.message}`);
     }
   }
 

@@ -1,247 +1,184 @@
-import { Injectable } from '@nestjs/common';
-import { CardStatus, ReviewRating, Prisma } from '@prisma/client';
+import { Injectable, BadRequestException } from '@nestjs/common';
+import { CardStatus, ReviewRating as PrismaReviewRating, Prisma, CardSchedule, User } from '@prisma/client';
 import {
   FSRS,
   Card as FsrsCard,
   createEmptyCard,
   generatorParameters,
-  Rating,
+  Rating as FsrsRating,
   FSRSParameters,
+  State as FsrsState,
+  ReviewLog as FsrsReviewLog,
+  CardInput,
+  DateInput,
 } from 'ts-fsrs';
 
-type InitialScheduleData = Omit<Prisma.CardScheduleCreateInput, 'card_id' | 'card'>;
+
+// Структура возвращаемого значения после расчета ревью
+export interface CalculatedReviewResult {
+  scheduleUpdateData: Partial<Omit<CardSchedule, 'card_id'>>;
+  logData: {
+    state: CardStatus;
+    rating: PrismaReviewRating;
+    // Можно добавить другие поля из FsrsReviewLog при необходимости
+  };
+}
 
 @Injectable()
 export class FsrsService {
-  private fsrs: FSRS;
+    // Конструктор больше не нужен, т.к. FSRS создается по запросу с параметрами пользователя
+    // constructor() {
+    //     const params: FSRSParameters = generatorParameters({
+    //       request_retention: 0.9,       maximum_interval: 365,       enable_fuzz: true,       enable_short_term: true,     });
+    //     this.fsrs = new FSRS(params);
+    // }
 
-  constructor() {
-        const params: FSRSParameters = generatorParameters({
-      request_retention: 0.9,       maximum_interval: 365,       enable_fuzz: true,       enable_short_term: true,     });
-    this.fsrs = new FSRS(params);
-  }
-
-    private mapRating(rating: ReviewRating): Rating {
-    switch (rating) {
-      case 'again':
-        return Rating.Again;
-      case 'hard':
-        return Rating.Hard;
-      case 'good':
-        return Rating.Good;
-      case 'easy':
-        return Rating.Easy;
-      default:
-        throw new Error('Некорректный рейтинг');
+    // Метод для получения экземпляра FSRS с параметрами пользователя или дефолтными
+    private getFsrsInstance(userFsrsParams?: Prisma.JsonValue): FSRS {
+        let fsrsParams: FSRSParameters;
+        if (userFsrsParams && typeof userFsrsParams === 'object' && !Array.isArray(userFsrsParams) && Object.keys(userFsrsParams).length > 0) {
+            try {
+                // Пробуем привести к FSRSParameters, могут быть ошибки типов
+                fsrsParams = userFsrsParams as unknown as FSRSParameters;
+                // TODO: Добавить валидацию параметров?
+                console.log(`[FSRS] Using custom params for user.`);
+            } catch (e) {
+                console.error("[FSRS] Error casting user params, using default:", e);
+                fsrsParams = generatorParameters(); 
+            }
+        } else {
+            fsrsParams = generatorParameters();
+            console.log(`[FSRS] Using default params for user.`);
+        }
+        return new FSRS(fsrsParams);
     }
-  }
 
-    private createFsrsCardFromState(
-    lastReview: Date | null,
-    dueDate: Date | null,
-    stability: number | null,
-    difficulty: number,
-    lapses: number,
-    reps: number,
-    state: CardStatus,
-  ): FsrsCard {
-        const card = createEmptyCard(lastReview || new Date());
+    private getFsrsRating(rating: PrismaReviewRating): FsrsRating {
+        switch (rating) {
+            case PrismaReviewRating.again: return FsrsRating.Again;
+            case PrismaReviewRating.hard:  return FsrsRating.Hard;
+            case PrismaReviewRating.good:  return FsrsRating.Good;
+            case PrismaReviewRating.easy:  return FsrsRating.Easy;
+            default: throw new BadRequestException(`Некорректная оценка Prisma: ${rating}`);
+        }
+    }
 
-        card.due = dueDate || new Date();
-    card.stability = stability || 0;
-    card.difficulty = difficulty;
-    card.lapses = lapses;
-    card.reps = reps;
+    private getPrismaReviewRating(rating: FsrsRating): PrismaReviewRating {
+        switch (rating) {
+            case FsrsRating.Again: return PrismaReviewRating.again;
+            case FsrsRating.Hard:  return PrismaReviewRating.hard;
+            case FsrsRating.Good:  return PrismaReviewRating.good;
+            case FsrsRating.Easy:  return PrismaReviewRating.easy;
+            default: throw new BadRequestException(`Некорректная FSRS оценка: ${rating}`);
+        }
+    }
     
+    private mapPrismaStatusToFsrsState(status: CardStatus): FsrsState {
+        switch (status) {
+            case CardStatus.new: return FsrsState.New;
+            case CardStatus.learning: return FsrsState.Learning;
+            case CardStatus.review: return FsrsState.Review;
+            case CardStatus.mastered: return FsrsState.Review; // FSRS не имеет "mastered"
+            default: return FsrsState.New;
+        }
+    }
+
+    private mapFsrsStateToPrismaStatus(state: FsrsState): CardStatus {
         switch (state) {
-      case 'new':
-        card.state = 0;
-        break;
-      case 'learning':
-        card.state = 1;
-        break;
-      case 'review':
-        card.state = 2;
-        break;
-      case 'mastered':
-        card.state = 3;
-        break;
+            case FsrsState.New: return CardStatus.new;
+            case FsrsState.Learning: return CardStatus.learning;
+            case FsrsState.Review: return CardStatus.review;
+            case FsrsState.Relearning: return CardStatus.learning; // Relearning -> learning
+            default: return CardStatus.new;
+        }
     }
 
-    return card;
-  }
-
-    private mapCardStateToStatus(state: number): CardStatus {
-    switch (state) {
-      case 0:
-        return 'new';
-      case 1:
-        return 'learning';
-      case 2:
-        return 'review';
-      case 3:
-        return 'mastered';
-      default:
-        return 'new';
+    // Создание FSRS Card из Prisma CardSchedule
+    private createFsrsCardFromSchedule(schedule: CardSchedule | null, now: Date): FsrsCard {
+        if (!schedule) {
+            return createEmptyCard(now);
+        }
+        const card = createEmptyCard(now);
+        card.due = schedule.due_date || now;
+        card.stability = schedule.stability;
+        card.difficulty = schedule.difficulty;
+        card.elapsed_days = schedule.last_review ? Math.max(0, Math.floor((now.getTime() - schedule.last_review.getTime()) / (1000 * 60 * 60 * 24))) : 0;
+        card.scheduled_days = schedule.last_review && schedule.due_date ? Math.max(0, Math.floor((schedule.due_date.getTime() - schedule.last_review.getTime()) / (1000 * 60 * 60 * 24))) : 0;
+        card.reps = schedule.review_count;
+        card.lapses = schedule.lapses;
+        card.state = this.mapPrismaStatusToFsrsState(schedule.status);
+        if (schedule.last_review) {
+            card.last_review = schedule.last_review;
+        }
+        return card;
     }
-  }
 
-  public initialStatus(): InitialScheduleData {
+  public initialStatus(): Omit<CardSchedule, 'card_id'> {
     const now = new Date();
     const emptyCard = createEmptyCard(now);
     return {
-      status: this.mapCardStateToStatus(emptyCard.state),
+      status: this.mapFsrsStateToPrismaStatus(emptyCard.state),
       difficulty: emptyCard.difficulty,
       stability: emptyCard.stability,
       review_count: emptyCard.reps,
       lapses: emptyCard.lapses,
       last_review: null,
       due_date: emptyCard.due,
-      learning_step: 0,
+      learning_step: 0, // Начальный шаг 0
+      consecutiveGoodCount: 0,
+      lastAnsweredGoodDate: null,
     };
   }
 
-  calculateNextReview(
-    rating: ReviewRating,
-    currentStatus: CardStatus,
-    stability: number | null,
-    difficulty: number,
-    review_count: number,
-    lapses: number,
-    learning_step: number,
-  ): {
-    status: CardStatus;
-    stability: number;
-    difficulty: number;
-    due_date: Date;
-    review_count: number;
-    lapses: number;
-    last_review: Date;
-    learning_step: number;
-  } {
-    const now = new Date();
-    
-        const fsrsCard = this.createFsrsCardFromState(
-      currentStatus === 'new' ? null : now,
-      null,
-      stability,
-      difficulty,
-      lapses,
-      review_count,
-      currentStatus,
-    );
+  /**
+   * Рассчитывает следующее состояние карточки с использованием FSRS.
+   * Применяется для статусов Review и при переходе из Learning в Review.
+   */
+  public calculateFsrsReview(
+    currentSchedule: CardSchedule,
+    rating: FsrsRating,
+    now: Date,
+    userFsrsParams?: Prisma.JsonValue
+  ): CalculatedReviewResult {
+    const fsrs = this.getFsrsInstance(userFsrsParams);
+    const fsrsCard = this.createFsrsCardFromSchedule(currentSchedule, now);
+    const result = fsrs.repeat(fsrsCard, now);
+    const nextState = result[rating];
 
-        const fsrsRating = this.mapRating(rating);
-    const nextState = this.fsrs.next(fsrsCard, now, fsrsRating as any);
-    
-        let newLearningStep = learning_step;
-    
-    if (currentStatus === 'new') {
-      newLearningStep = 1;
-    } else if (currentStatus === 'learning') {
-      if (rating === 'again') {
-        newLearningStep = 0;
-      } else if (rating === 'hard' || rating === 'good') {
-        newLearningStep += 1;
-      } else if (rating === 'easy') {
-        newLearningStep = 3;       }
-    } else {
-      if (rating === 'again') {
-        newLearningStep = 0;
-      }
+    if (!nextState) {
+      throw new Error(`FSRS calculation failed for rating ${rating}.`);
     }
 
-        let newStatus = this.mapCardStateToStatus(nextState.card.state);
-    
-        if (newStatus === 'learning' && newLearningStep >= 3) {
-      newStatus = 'review';
-    }
-    
-        if (newStatus === 'review' && rating === 'easy' && review_count >= 18) {
-      newStatus = 'mastered';
-    }
-
-    return {
-      status: newStatus,
-      stability: nextState.card.stability,
-      difficulty: nextState.card.difficulty,
-      due_date: nextState.card.due,
-      review_count: review_count + 1,
-      lapses: nextState.card.lapses,
-      last_review: now,
-      learning_step: newLearningStep,
+    const scheduleUpdateData: Partial<Omit<CardSchedule, 'card_id'>> = {
+        stability: nextState.card.stability,
+        difficulty: nextState.card.difficulty,
+        due_date: nextState.card.due,
+        status: this.mapFsrsStateToPrismaStatus(nextState.card.state),
+        review_count: nextState.card.reps,
+        lapses: nextState.card.lapses,
+        last_review: now, // Время текущего ревью
+        learning_step: 0, // Сбрасываем шаг при переходе/нахождении в review
     };
-  }
 
-  // Возвращаем метод прогнозирования
-  public predictSchedule(
-    currentStatus: CardStatus,
-    stability: number | null,
-    difficulty: number,
-    review_count: number,
-    lapses: number,
-    learning_step: number,
-    last_review: Date | null,
-    due_date: Date | null,
-    steps: number = 6,
-    assumedRating: ReviewRating = ReviewRating.good
-  ): Array<{ step: number; due_date: Date; status: CardStatus }> {
-    
-    const predictions: Array<{ step: number; due_date: Date; status: CardStatus }> = [];
-    const now = new Date();
+    const logData = {
+      state: this.mapFsrsStateToPrismaStatus(nextState.card.state),
+      rating: this.getPrismaReviewRating(rating)
+    };
 
-    let currentFsrsCard = this.createFsrsCardFromState(
-      last_review,
-      due_date,
-      stability,
-      difficulty,
-      lapses,
-      review_count,
-      currentStatus
-    );
-    if (currentStatus === 'new') {
-      currentFsrsCard = createEmptyCard(now);
+    // Особая обработка для Relearning -> переводим в Learning
+    if (nextState.card.state === FsrsState.Relearning) {
+      console.log(`[FSRS Service] Card moved to Relearning state by FSRS.`);
+      scheduleUpdateData.status = CardStatus.learning;
+      scheduleUpdateData.learning_step = 1; // Начинаем с первого шага
+      // Устанавливаем короткий интервал для первого шага ре-лернинга
+      scheduleUpdateData.due_date = new Date(now.getTime() + 1 * 60000); // Например, 1 минута
+      logData.state = CardStatus.learning; // В лог пишем, что перешли в learning
     }
 
-    let currentSimulatedStatus = currentStatus;
-    let currentSimulatedLearningStep = learning_step;
-    
-    let simulatedReviewTime = (due_date && due_date > now) ? new Date(due_date.getTime()) : new Date(now.getTime());
-
-    const fsrsAssumedRating = this.mapRating(assumedRating);
-
-    for (let step = 1; step <= steps; step++) {
-        const nextStateResult = this.fsrs.next(currentFsrsCard, simulatedReviewTime, fsrsAssumedRating as any);
-
-        let nextSimulatedLearningStep = currentSimulatedLearningStep;
-        if (currentSimulatedStatus === 'new') {
-          nextSimulatedLearningStep = 1;
-        } else if (currentSimulatedStatus === 'learning') {
-          if (assumedRating === ReviewRating.again) nextSimulatedLearningStep = 0;
-          else if (assumedRating === ReviewRating.hard || assumedRating === ReviewRating.good) nextSimulatedLearningStep += 1;
-          else if (assumedRating === ReviewRating.easy) nextSimulatedLearningStep = 3;
-        } else { 
-          if (assumedRating === ReviewRating.again) nextSimulatedLearningStep = 0; 
-        }
-        
-        let predictedStatus = this.mapCardStateToStatus(nextStateResult.card.state);
-        if (predictedStatus === 'learning' && nextSimulatedLearningStep >= 3) {
-          predictedStatus = 'review';
-        }
-       
-        predictions.push({
-          step,
-          due_date: nextStateResult.card.due,
-          status: predictedStatus,
-        });
-        
-        currentFsrsCard = nextStateResult.card;
-        currentSimulatedStatus = predictedStatus;
-        currentSimulatedLearningStep = nextSimulatedLearningStep;
-        simulatedReviewTime = new Date(nextStateResult.card.due.getTime()); 
-    }
-
-    return predictions;
+    return { scheduleUpdateData, logData };
   }
 
+  // TODO: Пересмотреть и удалить старый calculateNextReview и predictSchedule, если они больше не нужны или требуют адаптации
+  // public calculateNextReview(...) { ... } 
+  // public predictSchedule(...) { ... }
 }

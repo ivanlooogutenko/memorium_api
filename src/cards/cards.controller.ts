@@ -193,6 +193,7 @@ export class CardsController {
     return this.cardsService.getDueCards(userId, moduleId);
   }
 
+  /*
   @Get(':id/predict-schedule')
   @ApiOperation({ summary: 'Спрогнозировать расписание карточки (при оценке "good")' })
   @ApiParam({ name: 'id', description: 'ID карточки', type: Number })
@@ -206,6 +207,8 @@ export class CardsController {
     @Query('steps', new ParseIntPipe({ optional: true })) steps?: number
   ) {
     const userId = req.user.id;
-    return this.cardsService.predictSchedule(id, userId, steps);
+    // return this.cardsService.predictSchedule(id, userId, steps);
+    throw new Error('Endpoint not available'); // Или возвращаем ошибку
   }
+  */
 }

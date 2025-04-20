@@ -6,7 +6,26 @@ import { CardStatus, Prisma, Card, ReviewRating as PrismaReviewRating, CardSched
 import { FSRS, Card as FsrsCard, ReviewLog as FsrsReviewLog, State as FsrsState, Rating as FsrsRating, FSRSParameters, generatorParameters, createEmptyCard } from 'ts-fsrs';
 import { EntityNotFoundException, InvalidOperationException } from '../common/exceptions/business.exceptions';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
-import { FsrsService } from './fsrs.service';
+import { FsrsService, CalculatedReviewResult } from './fsrs.service';
+
+// Интервалы обучения в минутах
+const LEARNING_STEP_1_INTERVAL_MINUTES = 1;
+const LEARNING_STEP_2_INTERVAL_MINUTES = 10;
+const LEARNING_STEP_HARD_FACTOR = 0.5; // Множитель для интервала при оценке "Hard"
+
+// Интервалы в минутах
+const SHORT_INTERVAL_MINUTES = 1;
+const LEARNING_INTERVAL_NEW_OR_AGAIN_MINUTES = 1;
+const LEARNING_INTERVAL_HARD_MINUTES = 1;
+const LEARNING_INTERVAL_GOOD_STEP_2_MINUTES = 10; // Интервал после первого Good
+
+// Helper function to check if two dates are on the same day (ignores time)
+const isSameDay = (date1: Date | null | undefined, date2: Date | null | undefined): boolean => {
+  if (!date1 || !date2) return false;
+  return date1.getFullYear() === date2.getFullYear() &&
+         date1.getMonth() === date2.getMonth() &&
+         date1.getDate() === date2.getDate();
+};
 
 @Injectable()
 export class CardsService {
@@ -51,7 +70,7 @@ export class CardsService {
       case FsrsState.New: return CardStatus.new;
       case FsrsState.Learning: return CardStatus.learning;
       case FsrsState.Review: return CardStatus.review;
-      case FsrsState.Relearning: return CardStatus.learning; 
+      case FsrsState.Relearning: return CardStatus.learning;
       default: return CardStatus.new;
     }
   }
@@ -69,7 +88,9 @@ export class CardsService {
       card.reps = schedule.review_count;
       card.lapses = schedule.lapses;
       card.state = this.mapPrismaStatusToFsrsState(schedule.status);
-      card.last_review = schedule.last_review || undefined;
+      if (schedule.last_review) {
+         card.last_review = schedule.last_review;
+      }
       return card;
   }
 
@@ -96,7 +117,9 @@ export class CardsService {
         include: { module: { include: { user: true } } },
       });
       if (!card) throw new EntityNotFoundException('Карточка', cardId);
+      if (!card.module) throw new InvalidOperationException('Карточка не привязана к модулю');
       if (card.module.user_id !== userId) throw new ForbiddenException('У вас нет доступа к этой карточке');
+      if (!card.module.user) throw new InvalidOperationException('Не удалось загрузить данные пользователя для карточки');
       return card.module.user;
     } catch (error) {
        this.handleError(prefix, error);
@@ -352,92 +375,263 @@ export class CardsService {
   }
 
   async deleteCard(id: number, userId: number): Promise<void> {
-    console.warn('deleteCard - STUB');
-    await this.verifyCardOwner(userId, id);
-      }
+    const prefix = `deleteCard (id: ${id}, userId: ${userId})`;
+    try {
+      await this.verifyCardOwner(userId, id);
+      
+      await this.prisma.$transaction([
+        this.prisma.cardSchedule.deleteMany({ where: { card_id: id } }),
+        this.prisma.reviewLog.deleteMany({ where: { card_id: id } }),
+        this.prisma.card.delete({ where: { id } }),
+      ]);
+
+      console.log(`[CardsService] ${prefix} - Card deleted successfully.`);
+
+    } catch (error) {
+      this.handleError(prefix, error);
+    }
+  }
 
   async deleteAllCardsByModule(moduleId: number, userId: number): Promise<{ count: number }> {
-     console.warn('deleteAllCardsByModule - STUB');
-     await this.verifyModuleOwner(userId, moduleId);
-          return { count: 0 };
+    const prefix = `deleteAllCardsByModule (moduleId: ${moduleId}, userId: ${userId})`;
+    try {
+      await this.verifyModuleOwner(userId, moduleId);
+
+      const cardsToDelete = await this.prisma.card.findMany({
+        where: { module_id: moduleId },
+        select: { id: true },
+      });
+      const cardIds = cardsToDelete.map(card => card.id);
+
+      if (cardIds.length === 0) {
+        return { count: 0 };
+      }
+
+      const result = await this.prisma.$transaction([
+        this.prisma.cardSchedule.deleteMany({ where: { card_id: { in: cardIds } } }),
+        this.prisma.reviewLog.deleteMany({ where: { card_id: { in: cardIds } } }),
+        this.prisma.card.deleteMany({ where: { id: { in: cardIds } } }),
+      ]);
+
+      const deletedCount = result[result.length - 1].count;
+      console.log(`[CardsService] ${prefix} - Deleted ${deletedCount} cards.`);
+      return { count: deletedCount };
+
+    } catch (error) {
+      this.handleError(prefix, error);
+    }
   }
 
   async searchCards(query: string, userId: number): Promise<Card[]> {
-     console.warn('searchCards - STUB');
-          return [];
+    const prefix = `searchCards (query: ${query}, userId: ${userId})`;
+    try {
+      const cards = await this.prisma.card.findMany({
+        where: {
+          module: {
+            user_id: userId,
+          },
+          OR: [
+            { front_text: { contains: query, mode: 'insensitive' } },
+            { back_text: { contains: query, mode: 'insensitive' } },
+          ],
+        },
+        include: {
+          module: { select: { id: true, title: true } },
+          schedule: true, 
+        },
+        orderBy: { created_at: 'desc' }, 
+        take: 50,
+      });
+      console.log(`[CardsService] ${prefix} - Found ${cards.length} cards.`);
+      return cards as Card[];
+    } catch (error) {
+      this.handleError(prefix, error);
+    }
   }
 
   async getCardsByStatus(moduleId: number, status: CardStatus, date: string | undefined, userId: number): Promise<Card[]> {
-     console.warn('getCardsByStatus - STUB');
-          return [];
+    const prefix = `getCardsByStatus (moduleId: ${moduleId}, status: ${status}, date: ${date}, userId: ${userId})`;
+    try {
+      await this.verifyModuleOwner(userId, moduleId);
+      const whereCondition: Prisma.CardWhereInput = {
+        module_id: moduleId,
+        schedule: {
+          status: status,
+        },
+      };
+
+      if (date) {
+        const startDate = new Date(date);
+        startDate.setHours(0, 0, 0, 0);
+        const endDate = new Date(date);
+        endDate.setHours(23, 59, 59, 999);
+
+        if (whereCondition.schedule) {
+          whereCondition.schedule.due_date = {
+            gte: startDate,
+            lte: endDate,
+          };
+        }
+      }
+
+      const cards = await this.prisma.card.findMany({
+        where: whereCondition,
+        include: {
+          module: { select: { id: true, title: true } },
+          schedule: true,
+        },
+        orderBy: { schedule: { due_date: 'asc' } },
+      });
+      console.log(`[CardsService] ${prefix} - Found ${cards.length} cards.`);
+      return cards as Card[];
+    } catch (error) {
+      this.handleError(prefix, error);
+    }
   }
 
   async reviewCard(cardId: number, reviewDto: ReviewDto, userId: number): Promise<Card> {
     const prefix = `reviewCard (cardId: ${cardId}, userId: ${userId})`;
     const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0); // Начало текущего дня
+
     try {
       const user = await this.verifyCardOwner(userId, cardId);
-
-      const currentSchedule = await this.prisma.cardSchedule.findUnique({
+      let currentSchedule = await this.prisma.cardSchedule.findUnique({
         where: { card_id: cardId },
       });
+
       if (!currentSchedule) {
-           throw new InvalidOperationException(`Расписание для карточки ${cardId} не найдено.`); 
+        console.warn(`[${prefix}] Schedule not found for card ${cardId}. Creating initial schedule.`);
+        const initialData = this.fsrsService.initialStatus();
+        currentSchedule = await this.prisma.cardSchedule.create({ data: { card_id: cardId, ...initialData } });
       }
 
-      let fsrsParams: FSRSParameters;
-      if (user.fsrsParams && typeof user.fsrsParams === 'object' && !Array.isArray(user.fsrsParams) && Object.keys(user.fsrsParams).length > 0) {
-          fsrsParams = user.fsrsParams as unknown as FSRSParameters;
-          console.log(`[FSRS] Using custom params for user ${userId}`);
-      } else {
-          fsrsParams = generatorParameters();
-          console.log(`[FSRS] Using default params for user ${userId}`);
-      }
-      
-      const fsrs = new FSRS(fsrsParams);
-
-      const fsrsCard = this.createFsrsCardFromSchedule(currentSchedule, now);
       const fsrsRating = this.getFsrsRating(reviewDto.rating);
       const prismaRating = this.getPrismaReviewRating(reviewDto.rating);
-      
-      const result = fsrs.repeat(fsrsCard, now);
-      const nextState = result[fsrsRating];
 
-      if (!nextState) {
-          throw new Error('FSRS calculation failed to return next state.');
+      let scheduleUpdateData: Prisma.CardScheduleUpdateInput = {};
+      let logState: CardStatus = currentSchedule.status;
+      let logRating: PrismaReviewRating = prismaRating;
+
+      const consecutiveGoodCount = currentSchedule.consecutiveGoodCount || 0;
+      const lastAnsweredGoodDate = currentSchedule.lastAnsweredGoodDate;
+      let nextConsecutiveGoodCount = 0;
+      let nextLastAnsweredGoodDate: Date | null = null;
+
+      switch (currentSchedule.status) {
+        case CardStatus.new:
+          logState = CardStatus.new;
+          if (fsrsRating === FsrsRating.Again) {
+            scheduleUpdateData = {
+              due_date: todayStart, // Остается due сегодня
+              last_review: now,
+              consecutiveGoodCount: 0,
+              lastAnsweredGoodDate: null,
+            };
+          } else { // Hard, Good, Easy
+            nextConsecutiveGoodCount = (fsrsRating === FsrsRating.Good || fsrsRating === FsrsRating.Easy) ? 1 : 0;
+            nextLastAnsweredGoodDate = nextConsecutiveGoodCount === 1 ? now : null;
+            scheduleUpdateData = {
+              status: CardStatus.learning,
+              learning_step: 1,
+              due_date: todayStart, // Сразу доступна для изучения сегодня
+              last_review: now,
+              review_count: 1,
+              lapses: 0,
+              consecutiveGoodCount: nextConsecutiveGoodCount,
+              lastAnsweredGoodDate: nextLastAnsweredGoodDate,
+            };
+          }
+          break;
+
+        case CardStatus.learning:
+          logState = CardStatus.learning;
+          nextConsecutiveGoodCount = consecutiveGoodCount;
+          nextLastAnsweredGoodDate = lastAnsweredGoodDate;
+
+          if (fsrsRating === FsrsRating.Good || fsrsRating === FsrsRating.Easy) {
+            if (isSameDay(lastAnsweredGoodDate, now)) {
+              nextConsecutiveGoodCount += 1;
+            } else {
+              nextConsecutiveGoodCount = 1;
+            }
+            nextLastAnsweredGoodDate = now;
+
+            if (nextConsecutiveGoodCount >= 3) {
+              // Переход в review
+              console.log(`[CardsService] Card ${cardId} graduating from learning.`);
+              const { scheduleUpdateData: fsrsUpdate, logData: fsrsLog } = 
+                this.fsrsService.calculateFsrsReview(currentSchedule, fsrsRating, now, user.fsrsParams);
+              scheduleUpdateData = { ...fsrsUpdate, consecutiveGoodCount: 0, lastAnsweredGoodDate: null };
+              logState = fsrsLog.state;
+            } else {
+              // Продолжаем learning, остается due сегодня
+              scheduleUpdateData = {
+                learning_step: nextConsecutiveGoodCount,
+                due_date: todayStart, // Остается due сегодня
+                last_review: now,
+                review_count: (currentSchedule.review_count || 0) + 1,
+                consecutiveGoodCount: nextConsecutiveGoodCount,
+                lastAnsweredGoodDate: nextLastAnsweredGoodDate,
+              };
+            }
+          } else { // Again or Hard
+            scheduleUpdateData = {
+              learning_step: 1, // Сброс шага
+              due_date: todayStart, // Остается due сегодня
+              lapses: (fsrsRating === FsrsRating.Again) ? (currentSchedule.lapses || 0) + 1 : currentSchedule.lapses,
+              last_review: now,
+              review_count: (currentSchedule.review_count || 0) + 1,
+              consecutiveGoodCount: 0,
+              lastAnsweredGoodDate: null,
+            };
+          }
+          break;
+
+        case CardStatus.review:
+        case CardStatus.mastered:
+          // Логика FSRS как и раньше
+          logState = currentSchedule.status;
+          const { scheduleUpdateData: fsrsUpdate, logData: fsrsLog } = 
+            this.fsrsService.calculateFsrsReview(currentSchedule, fsrsRating, now, user.fsrsParams);
+          scheduleUpdateData = { ...fsrsUpdate, consecutiveGoodCount: 0, lastAnsweredGoodDate: null };
+          logState = fsrsLog.state;
+          break;
+
+        default:
+          // Обработка по умолчанию (как review)
+          const { scheduleUpdateData: defaultUpdate, logData: defaultLog } = 
+            this.fsrsService.calculateFsrsReview(currentSchedule, fsrsRating, now, user.fsrsParams);
+          scheduleUpdateData = { ...defaultUpdate, consecutiveGoodCount: 0, lastAnsweredGoodDate: null };
+          logState = defaultLog.state;
+          break;
       }
 
-      const updatedCard = await this.prisma.$transaction(async (prisma) => {
-            await prisma.cardSchedule.update({
-                where: { card_id: cardId },
-                data: {
-                    stability: nextState.card.stability,
-                    difficulty: nextState.card.difficulty,
-                    due_date: nextState.card.due,
-                    status: this.mapFsrsStateToPrismaStatus(nextState.card.state),
-                    review_count: nextState.card.reps,
-                    lapses: nextState.card.lapses,
-                    last_review: nextState.log.due,
-                },
-            });
+      // --- Сохранение результатов --- 
+      const [updatedSchedule, reviewLog] = await this.prisma.$transaction([
+         this.prisma.cardSchedule.update({
+          where: { card_id: cardId },
+          data: scheduleUpdateData,
+        }),
+         this.prisma.reviewLog.create({
+          data: {
+            user_id: userId,
+            card_id: cardId,
+            rating: prismaRating, // Используем prismaRating для лога
+            state: logState, // Статус *до* ревью
+            review_date: now,
+          },
+        })
+      ]);
 
-            await prisma.reviewLog.create({
-                data: {
-                    user_id: userId,
-                    card_id: cardId,
-                    rating: prismaRating,
-                    state: this.mapFsrsStateToPrismaStatus(nextState.log.state),
-                    review_date: nextState.log.due,
-                }
-            });
-
-            return prisma.card.findUniqueOrThrow({
-                where: { id: cardId },
-                include: { schedule: true, examples: true, module: true }
-            });
+       // Возвращаем обновленную карточку целиком
+      const updatedCard = await this.prisma.card.findUniqueOrThrow({
+          where: { id: cardId },
+          include: { schedule: true, examples: true, module: true },
       });
-      
-      console.log(`[CardsService] Card ${cardId} reviewed with rating ${reviewDto.rating}. New due date: ${nextState.card.due.toISOString()}`);
+
+      console.log(`[CardsService] ${prefix} - Card reviewed. New status: ${updatedSchedule.status}, ConsGood: ${updatedSchedule.consecutiveGoodCount}, Due: ${updatedSchedule.due_date?.toISOString() ?? 'N/A'}`);
       return updatedCard as Card;
 
     } catch (error) {
@@ -446,11 +640,37 @@ export class CardsService {
   }
 
   async resetCardProgress(cardId: number, userId: number): Promise<Card> {
-     console.warn('resetCardProgress - STUB');
-     await this.verifyCardOwner(userId, cardId);
-          const card = await this.getCardById(cardId, userId);
-     if (!card) throw new NotFoundException();
-     return card;
+    const prefix = `resetCardProgress (cardId: ${cardId}, userId: ${userId})`;
+    try {
+      await this.verifyCardOwner(userId, cardId);
+      
+      const initialScheduleData = this.fsrsService.initialStatus(); 
+
+      const updatedCard = await this.prisma.$transaction(async (prisma) => {
+          // Используем update вместо upsert, т.к. currentSchedule уже есть или создался в reviewCard
+          await prisma.cardSchedule.update({
+              where: { card_id: cardId },
+              data: {
+                  ...initialScheduleData, // Данные из initialStatus
+                  consecutiveGoodCount: 0, // Явно сбрасываем новые поля
+                  lastAnsweredGoodDate: null,
+              },
+          });
+          
+          await prisma.reviewLog.deleteMany({ where: { card_id: cardId } });
+          
+          return prisma.card.findUniqueOrThrow({
+              where: { id: cardId },
+              include: { schedule: true, examples: true, module: true }
+          });
+      });
+
+      console.log(`[CardsService] ${prefix} - Progress reset successfully.`);
+      return updatedCard as Card;
+      
+    } catch (error) {
+      this.handleError(prefix, error);
+    }
   }
   
   async uploadImage(id: number, userId: number): Promise<any> {       console.warn('uploadImage - STUB');
@@ -504,6 +724,7 @@ export class CardsService {
     }
   }
   
+  /*
   async predictSchedule(cardId: number, userId: number, steps: number = 6) {
     await this._checkCardOwnership(cardId, userId);
 
@@ -543,17 +764,19 @@ export class CardsService {
           learning_step: schedule.learning_step,
       }
     }
-
-    return this.fsrsService.predictSchedule(
-      scheduleData.status,
-      scheduleData.stability,
-      scheduleData.difficulty,
-      scheduleData.review_count,
-      scheduleData.lapses,
-      scheduleData.learning_step,
-      scheduleData.last_review,
-      scheduleData.due_date,
-      steps
-    );
+    // Вызов закомментированного метода
+    // return this.fsrsService.predictSchedule(
+    //   scheduleData.status,
+    //   scheduleData.stability,
+    //   scheduleData.difficulty,
+    //   scheduleData.review_count,
+    //   scheduleData.lapses,
+    //   scheduleData.learning_step,
+    //   scheduleData.last_review,
+    //   scheduleData.due_date,
+    //   steps
+    // );
+     return []; // Возвращаем пустой массив или выбрасываем ошибку
   }
+  */
 }

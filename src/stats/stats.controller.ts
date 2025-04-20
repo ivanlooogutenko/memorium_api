@@ -3,6 +3,7 @@ import { StatsService } from './stats.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { StatsFilterDto } from './dto/stats-filter.dto';
+import { GetWeeklyStatsQueryDto, WeeklyStatItemDto } from './dto/get-weekly-stats.dto';
 
 
 
@@ -37,6 +38,25 @@ export class StatsController {
       filterDto.moduleId,
       filterDto.fromDate,
       filterDto.toDate
+    );
+  }
+
+
+
+  @ApiOperation({ summary: 'Получить еженедельную статистику пользователя (за последние 7 дней)' })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Еженедельная статистика пользователя (массив из 7 элементов)', 
+    type: [WeeklyStatItemDto] 
+  })
+  @Get('weekly')
+  getWeeklyStats(
+    @Request() req,
+    @Query() query: GetWeeklyStatsQueryDto
+  ) {
+    return this.statsService.getWeeklyStats(
+      req.user.id,
+      query.moduleId
     );
   }
 
