@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException, BadRequestException 
 import { PrismaService } from '../prisma/prisma.service';
 import { CardDto } from './dto/card.dto';
 import { ReviewDto } from './dto/review.dto';
-import { CardStatus, Prisma, Card, ReviewRating as PrismaReviewRating, CardSchedule, User, ReviewLog } from '@prisma/client';
+import { CardStatus, Prisma, Card, ReviewRating as PrismaReviewRating, CardSchedule, User, ReviewLog, Example } from '@prisma/client';
 import { FSRS, Card as FsrsCard, ReviewLog as FsrsReviewLog, State as FsrsState, Rating as FsrsRating, FSRSParameters, generatorParameters, createEmptyCard } from 'ts-fsrs';
 import { EntityNotFoundException, InvalidOperationException } from '../common/exceptions/business.exceptions';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
@@ -257,12 +257,12 @@ export class CardsService {
     }
   }
 
-  async createCard(createCardDto: CardDto, userId: number): Promise<Card> {
+  async createCard(createCardDto: CardDto, userId: number): Promise<Card & { examples: Example[] }> {
     const prefix = `createCard (userId: ${userId})`;
     try {
         const moduleId = Number(createCardDto.module_id);
         if (isNaN(moduleId)) throw new InvalidOperationException('Некорректный ID модуля');
-        await this.verifyModuleOwner(userId, moduleId); 
+        await this.verifyModuleOwner(userId, moduleId);
 
         const existingCard = await this.prisma.card.findFirst({
             where: { module_id: moduleId, front_text: createCardDto.front_text }
@@ -272,6 +272,7 @@ export class CardsService {
         }
 
         const createdCardWithRelations = await this.prisma.$transaction(async (prisma) => {
+            // 1. Создаем карточку
             const card = await prisma.card.create({
                 data: {
                     module_id: moduleId,
@@ -282,11 +283,12 @@ export class CardsService {
                 },
             });
 
+            // 2. Создаем расписание для карточки
             const now = new Date();
             const initialFsrsCard = createEmptyCard(now);
             await prisma.cardSchedule.create({
-                data: { 
-                    card_id: card.id, 
+                data: {
+                    card_id: card.id,
                     status: this.mapFsrsStateToPrismaStatus(initialFsrsCard.state),
                     difficulty: initialFsrsCard.difficulty,
                     stability: initialFsrsCard.stability,
@@ -295,82 +297,135 @@ export class CardsService {
                     last_review: null,
                     due_date: initialFsrsCard.due,
                     learning_step: 0,
+                    consecutiveGoodCount: 0,
+                    lastAnsweredGoodDate: null
                  }
             });
-            return prisma.card.findUniqueOrThrow({
+
+            // 3. Создаем примеры, если они переданы
+            let createdExamples: Example[] = [];
+            if (createCardDto.examples && createCardDto.examples.length > 0) {
+                const exampleData = createCardDto.examples.map((ex, index) => ({
+                    card_id: card.id,
+                    example_text: ex.example_text,
+                    translation_text: ex.translation_text || null,
+                    example_order: index + 1,
+                }));
+                await prisma.example.createMany({
+                    data: exampleData,
+                });
+                // Получаем созданные примеры для возврата
+                createdExamples = await prisma.example.findMany({
+                    where: { card_id: card.id },
+                    orderBy: { example_order: 'asc' }
+                });
+            }
+
+            // 4. Получаем полную карточку с связями для возврата
+            // Используем findUniqueOrThrow чтобы убедиться, что карточка существует
+            const fullCard = await prisma.card.findUniqueOrThrow({
                 where: { id: card.id },
-                include: { module: true, schedule: true, examples: true }
+                include: { module: true, schedule: true } // Примеры уже получены
             });
+
+            // Объединяем данные карточки и примеры
+            return { ...fullCard, examples: createdExamples };
         });
 
-        console.log(`[CardsService] Card created successfully with ID: ${createdCardWithRelations.id}`);
-        return createdCardWithRelations as Card;
+        console.log(`[CardsService] Card created successfully with ID: ${createdCardWithRelations.id} and ${createdCardWithRelations.examples.length} examples.`);
+        return createdCardWithRelations;
     } catch (error) {
+        // Логируем ошибку перед тем как перебросить ее
+        console.error(`[CardsService Error - ${prefix}]`, error);
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+            // Обработка уникального ограничения (например, module_id + front_text)
+             throw new InvalidOperationException(`Карточка с текстом "${createCardDto.front_text}" уже существует в этом модуле.`);
+        }
+        // Перебрасываем другие обработанные ошибки или генерируем InvalidOperationException
         this.handleError(prefix, error);
     }
   }
 
-  async updateCard(id: number, updateCardDto: CardDto, userId: number): Promise<Card> {
+  async updateCard(id: number, updateCardDto: CardDto, userId: number): Promise<Card & { examples: Example[] }> {
+    const prefix = `updateCard (id: ${id}, userId: ${userId})`;
     try {
-      await this.verifyCardOwner(userId, id);
-      const card = await this.prisma.card.findUnique({
-        where: { id },
-        include: { module: true },
-      });
-
-      if (!card) {
-        throw new EntityNotFoundException('Карточка', id);
-      }
-
-      const moduleId = parseInt(updateCardDto.module_id, 10);
-      
-      if (moduleId !== card.module_id) {
-        const newModule = await this.prisma.module.findUnique({
-          where: { id: moduleId },
+        await this.verifyCardOwner(userId, id);
+        const card = await this.prisma.card.findUnique({
+            where: { id },
+            include: { module: true, examples: true }, // Включаем существующие примеры
         });
 
-        if (!newModule) {
-          throw new EntityNotFoundException('Модуль', moduleId);
+        if (!card) {
+            throw new EntityNotFoundException('Карточка', id);
         }
 
-        if (newModule.user_id !== userId) {
-          throw new ForbiddenException('У вас нет доступа к этому модулю');
-        }
-      }
+        const moduleId = parseInt(updateCardDto.module_id, 10);
 
-      if (updateCardDto.front_text !== card.front_text) {
-        const existingCard = await this.prisma.card.findFirst({
-          where: {
-            module_id: moduleId,
-            front_text: updateCardDto.front_text,
-            id: { not: id },
-          },
+        if (moduleId !== card.module_id) {
+            // Проверка прав на новый модуль
+            const newModule = await this.prisma.module.findUnique({ where: { id: moduleId } });
+            if (!newModule) throw new EntityNotFoundException('Модуль', moduleId);
+            if (newModule.user_id !== userId) throw new ForbiddenException('У вас нет доступа к этому модулю');
+        }
+
+        // Проверка уникальности front_text в НОВОМ модуле (если текст или модуль изменились)
+        if (updateCardDto.front_text !== card.front_text || moduleId !== card.module_id) {
+            const existingCard = await this.prisma.card.findFirst({
+                where: {
+                    module_id: moduleId,
+                    front_text: updateCardDto.front_text,
+                    id: { not: id }, // Исключаем текущую карточку
+                },
+            });
+            if (existingCard) {
+                throw new InvalidOperationException(`Карточка с текстом "${updateCardDto.front_text}" уже существует в модуле ID ${moduleId}`);
+            }
+        }
+
+        const updatedCardWithRelations = await this.prisma.$transaction(async (prisma) => {
+            // 1. Обновляем основные данные карточки
+            const updatedCardData = await prisma.card.update({
+                where: { id },
+                data: {
+                    module_id: moduleId,
+                    front_text: updateCardDto.front_text,
+                    back_text: updateCardDto.back_text,
+                    image_url: updateCardDto.image_url,
+                    tts_audio_url: updateCardDto.tts_audio_url,
+                },
+                include: { module: true, schedule: true } // Включаем связи
+            });
+
+            // 2. Обновляем примеры (удаляем старые, создаем новые)
+            // Это самый простой способ гарантировать правильный порядок и данные
+            await prisma.example.deleteMany({ where: { card_id: id } });
+
+            let updatedExamples: Example[] = [];
+            if (updateCardDto.examples && updateCardDto.examples.length > 0) {
+                const exampleData = updateCardDto.examples.map((ex, index) => ({
+                    card_id: id,
+                    example_text: ex.example_text,
+                    translation_text: ex.translation_text || null,
+                    example_order: index + 1,
+                }));
+                await prisma.example.createMany({
+                    data: exampleData,
+                });
+                // Получаем обновленные примеры для возврата
+                updatedExamples = await prisma.example.findMany({
+                    where: { card_id: id },
+                    orderBy: { example_order: 'asc' }
+                });
+            }
+
+            // Объединяем обновленные данные карточки и примеры
+            return { ...updatedCardData, examples: updatedExamples };
         });
 
-        if (existingCard) {
-          throw new InvalidOperationException(`Карточка с текстом "${updateCardDto.front_text}" уже существует в этом модуле`);
-        }
-      }
-
-      const updatedCard = await this.prisma.card.update({
-        where: { id },
-        data: {
-          module_id: moduleId,
-          front_text: updateCardDto.front_text,
-          back_text: updateCardDto.back_text,
-          image_url: updateCardDto.image_url,
-          tts_audio_url: updateCardDto.tts_audio_url,
-        },
-        include: {
-          module: true,
-          schedule: true,
-          examples: true,
-        },
-      });
-
-      return updatedCard as Card;
+        console.log(`[CardsService] Card updated successfully ID: ${updatedCardWithRelations.id} with ${updatedCardWithRelations.examples.length} examples.`);
+        return updatedCardWithRelations;
     } catch (error) {
-      this.handleError(`updateCard (id: ${id}, userId: ${userId})`, error);
+        this.handleError(prefix, error);
     }
   }
 
