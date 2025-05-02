@@ -56,24 +56,93 @@ export class ModulesService {
         include: {
           language: true,
           cards: {
-            select: {
-              id: true
-            }
+            include: {
+              schedule: true,
+            },
           },
         },
         orderBy: { created_at: 'desc' },
       });
 
-      // Добавляем количество карточек в каждый модуль
-      const modulesWithCardCount = modules.map(module => ({
-        ...module,
-        card_count: module.cards.length,
-        cards: undefined // Удаляем массив карточек, так как нам нужно только количество
-      }));
+      // Вычисляем статистику для каждого модуля
+      const modulesWithStats = modules.map(module => {
+        const totalCards = module.cards.length;
+        let stats = {
+          new: 0,
+          learning: 0,
+          dueToday: 0,
+          reviewing: 0, // Общее количество карточек в статусе LEARNING или REVIEW
+          learned: 0,   // Общее количество карточек в статусе MASTERED
+        };
 
-      return modulesWithCardCount;
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // Начало сегодняшнего дня
+        const tomorrowStart = new Date(todayStart);
+        tomorrowStart.setDate(todayStart.getDate() + 1); // Начало завтрашнего дня
+
+        module.cards.forEach(card => {
+          const schedule = card.schedule;
+          if (!schedule) {
+            stats.new++;
+            // Карточки без расписания считаются 'new' и не могут быть 'dueToday'
+          } else {
+             let isDueToday = false;
+             if (schedule.due_date) {
+                 const dueDate = new Date(schedule.due_date);
+                 // Считаем "сегодняшними" те, что должны быть повторены до начала завтрашнего дня
+                 // (<= todayEnd, which is equivalent to < tomorrowStart)
+                 isDueToday = dueDate < tomorrowStart;
+             }
+
+            switch (schedule.status) {
+              case 'new': // Явно проверяем 'new' статус в расписании
+                stats.new++;
+                // Новые карточки по определению не могут быть dueToday
+                break;
+              case 'learning':
+                stats.learning++;
+                stats.reviewing++; // Учитываем в общем счетчике "повторяемых"
+                if (isDueToday) {
+                  stats.dueToday++;
+                }
+                break;
+              case 'review':
+                // Эти карточки уже не learning, но еще не mastered
+                stats.reviewing++; // Учитываем в общем счетчике "повторяемых"
+                 if (isDueToday) {
+                   stats.dueToday++;
+                 }
+                break;
+              case 'mastered':
+                stats.learned++;
+                break;
+              default:
+                 // Если статус неизвестен, можно считать новой или пропускать
+                 console.warn(`[ModulesService] Unknown card status found: ${schedule.status} for card ${card.id}`);
+                 stats.new++; // Fallback to new
+                 break;
+            }
+          }
+        });
+
+        return {
+          id: module.id,
+          user_id: module.user_id,
+          language_id: module.language_id,
+          title: module.title,
+          description: module.description,
+          created_at: module.created_at,
+          language: module.language,
+          cards_count: totalCards,
+          stats: stats,
+        };
+      });
+
+      return modulesWithStats;
     } catch (error) {
-      throw new InvalidOperationException('Не удалось получить модули пользователя');
+       console.error('[ModulesService] Error in getModulesByUser:', error);
+       // Используем InvalidOperationException или другую подходящую ошибку
+      throw new InvalidOperationException('Не удалось получить модули пользователя со статистикой');
     }
   }
 
