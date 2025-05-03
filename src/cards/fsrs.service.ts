@@ -137,7 +137,7 @@ export class FsrsService {
   public calculateFsrsReview(
     currentSchedule: CardSchedule,
     rating: FsrsRating,
-    now: Date,
+    now: Date, // Время фактического ревью
     userFsrsParams?: Prisma.JsonValue
   ): CalculatedReviewResult {
     const fsrs = this.getFsrsInstance(userFsrsParams);
@@ -149,15 +149,19 @@ export class FsrsService {
       throw new Error(`FSRS calculation failed for rating ${rating}.`);
     }
 
+    // Вычисляем начало текущего дня
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
     const scheduleUpdateData: Partial<Omit<CardSchedule, 'card_id'>> = {
         stability: nextState.card.stability,
         difficulty: nextState.card.difficulty,
-        due_date: nextState.card.due,
+        due_date: nextState.card.due, // Используем дату, рассчитанную FSRS
         status: this.mapFsrsStateToPrismaStatus(nextState.card.state),
         review_count: nextState.card.reps,
         lapses: nextState.card.lapses,
-        last_review: now, // Время текущего ревью
-        learning_step: 0, // Сбрасываем шаг при переходе/нахождении в review
+        last_review: now,
+        learning_step: 0,
     };
 
     const logData = {
@@ -165,14 +169,14 @@ export class FsrsService {
       rating: this.getPrismaReviewRating(rating)
     };
 
-    // Особая обработка для Relearning -> переводим в Learning
+    // Особая обработка для Relearning
     if (nextState.card.state === FsrsState.Relearning) {
       console.log(`[FSRS Service] Card moved to Relearning state by FSRS.`);
       scheduleUpdateData.status = CardStatus.learning;
-      scheduleUpdateData.learning_step = 1; // Начинаем с первого шага
-      // Устанавливаем короткий интервал для первого шага ре-лернинга
-      scheduleUpdateData.due_date = new Date(now.getTime() + 1 * 60000); // Например, 1 минута
-      logData.state = CardStatus.learning; // В лог пишем, что перешли в learning
+      scheduleUpdateData.learning_step = 1;
+      // Устанавливаем due_date на НАЧАЛО ТЕКУЩЕГО ДНЯ
+      scheduleUpdateData.due_date = todayStart; 
+      logData.state = CardStatus.learning;
     }
 
     return { scheduleUpdateData, logData };

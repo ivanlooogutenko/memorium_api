@@ -1,11 +1,19 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EntityNotFoundException, InvalidOperationException } from '../common/exceptions/business.exceptions';
-import { CardStatus } from '@prisma/client';
+import { CardStatus, User } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 export interface WeeklyStatItem {
   date: string;
   reviewsCount: number;
+}
+
+// Экспортируем интерфейс
+export interface GlobalProgressResponse {
+  completedToday: number;
+  currentStreak: number;
+  maxStreak: number;
 }
 
 @Injectable()
@@ -456,63 +464,52 @@ export class StatsService {
     }
   }
 
-  async getWeeklyStats(userId: number, moduleId?: number): Promise<WeeklyStatItem[]> {
+  async getWeeklyStats(userId: number): Promise<WeeklyStatItem[]> {
+    const prefix = `getWeeklyStats (userId: ${userId})`;
+    console.log(`[StatsService] ${prefix} - Fetching global weekly stats (goal-achieving reviews)...`);
     try {
       const today = new Date();
       const sevenDaysAgo = new Date(today);
-      sevenDaysAgo.setDate(today.getDate() - 6); // Включая сегодня, всего 7 дней
-      sevenDaysAgo.setHours(0, 0, 0, 0); // Начало дня
+      sevenDaysAgo.setDate(today.getDate() - 6); 
+      sevenDaysAgo.setHours(0, 0, 0, 0);
 
-      today.setHours(23, 59, 59, 999); // Конец сегодняшнего дня
+      const reviewsGroupedByDay: { review_day: Date, count: bigint }[] = await this.prisma.$queryRaw`
+        SELECT 
+          DATE_TRUNC('day', review_date)::date as review_day, 
+          COUNT(*) as count 
+        FROM "ReviewLog"
+        WHERE 
+          user_id = ${userId}
+          AND review_date >= ${sevenDaysAgo}
+          AND review_date < DATE_TRUNC('day', ${today} + INTERVAL '1 day')
+          AND "countsTowardsGoal" = true
+        GROUP BY review_day
+        ORDER BY review_day ASC
+      `;
 
-      const whereCondition: any = {
-        user_id: userId,
-        review_date: {
-          gte: sevenDaysAgo,
-          lte: today,
-        },
-      };
+      console.log(`[StatsService] ${prefix} - Raw grouped reviews from DB ($queryRaw):`, reviewsGroupedByDay);
 
-      if (moduleId) {
-        whereCondition.card = {
-          module_id: moduleId,
-        };
-      }
-
-      const reviews = await this.prisma.reviewLog.groupBy({
-        by: ['review_date'],
-        where: whereCondition,
-        _count: {
-          id: true,
-        },
-        orderBy: {
-          review_date: 'asc',
-        },
-      });
-
-      // Создаем карту для быстрого доступа к данным по дате
       const reviewsMap = new Map<string, number>();
-      reviews.forEach(review => {
-        const dateString = review.review_date.toISOString().split('T')[0];
-        reviewsMap.set(dateString, review._count.id);
+      reviewsGroupedByDay.forEach(review => {
+        const dateString = review.review_day.toISOString().split('T')[0];
+        reviewsMap.set(dateString, Number(review.count));
       });
 
-      // Формируем результат для последних 7 дней
       const weeklyData: WeeklyStatItem[] = [];
       const currentDate = new Date(sevenDaysAgo);
-
       for (let i = 0; i < 7; i++) {
         const dateString = currentDate.toISOString().split('T')[0];
         weeklyData.push({
           date: dateString,
-          reviewsCount: reviewsMap.get(dateString) || 0,
+          reviewsCount: reviewsMap.get(dateString) || 0, 
         });
         currentDate.setDate(currentDate.getDate() + 1);
       }
-
+      console.log(`[StatsService] ${prefix} - Returning formatted weekly data:`, JSON.stringify(weeklyData));
       return weeklyData;
 
     } catch (error) {
+      console.error(`[StatsService] Error in ${prefix}:`, error);
       throw new InvalidOperationException(`Ошибка при получении еженедельной статистики: ${error.message}`);
     }
   }
@@ -635,6 +632,128 @@ export class StatsService {
         throw error;
       }
       throw new InvalidOperationException(`Ошибка при получении прогресса обучения: ${error.message}`);
+    }
+  }
+
+  // Метод для проверки, была ли достигнута цель за определенный день
+  private async wasGoalAchieved(userId: number, date: Date, dailyGoal: number): Promise<boolean> {
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    const count = await this.prisma.reviewLog.count({
+      where: {
+        user_id: userId,
+        review_date: { gte: start, lte: end },
+        countsTowardsGoal: true,
+      },
+    });
+    return count >= dailyGoal;
+  }
+
+  // Обновленный метод
+  async getGlobalDailyProgress(userId: number): Promise<GlobalProgressResponse> {
+    const prefix = `getGlobalDailyProgress (userId: ${userId})`;
+    const now = new Date();
+    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999);
+    const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(todayStart.getDate() - 1);
+    const yesterdayEnd = new Date(yesterdayStart); yesterdayEnd.setHours(23, 59, 59, 999);
+
+    console.log(`[StatsService] ${prefix} - Updating streak and fetching progress...`);
+
+    try {
+      // 1. Получаем пользователя с нужными полями
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+            id: true,
+            dailyGoal: true,
+            currentStreak: true,
+            maxStreak: true,
+            lastStreakUpdate: true,
+        }
+      });
+      if (!user) {
+          throw new EntityNotFoundException('Пользователь', userId);
+      }
+      const dailyGoal = user.dailyGoal;
+
+      // 2. Получаем прогресс за сегодня
+      const completedToday = await this.prisma.reviewLog.count({
+          where: {
+              user_id: userId,
+              review_date: { gte: todayStart, lte: todayEnd },
+              countsTowardsGoal: true,
+          },
+      });
+      const goalAchievedToday = completedToday >= dailyGoal;
+
+      // 3. Логика обновления стрика
+      let currentStreak = user.currentStreak;
+      let maxStreak = user.maxStreak;
+      const lastUpdateDate = user.lastStreakUpdate ? new Date(user.lastStreakUpdate) : null;
+      const lastUpdateStart = lastUpdateDate ? new Date(lastUpdateDate) : null;
+      if(lastUpdateStart) lastUpdateStart.setHours(0,0,0,0);
+
+      let needsDbUpdate = false;
+
+      if (lastUpdateStart && lastUpdateStart.getTime() === todayStart.getTime()) {
+        // Обновление уже было сегодня, ничего не делаем
+        console.log(`[StatsService] ${prefix} - Streak already updated today.`);
+      } else if (lastUpdateStart && lastUpdateStart.getTime() === yesterdayStart.getTime()) {
+        // Последнее обновление было вчера
+        const goalAchievedYesterday = await this.wasGoalAchieved(userId, yesterdayStart, dailyGoal);
+        if (goalAchievedYesterday) {
+            // Продолжаем стрик, если вчера была цель
+            console.log(`[StatsService] ${prefix} - Goal achieved yesterday. Continuing streak.`);
+            currentStreak += 1;
+            needsDbUpdate = true;
+        } else {
+            // Сбрасываем стрик, если вчера не было цели
+            console.log(`[StatsService] ${prefix} - Goal NOT achieved yesterday. Resetting streak.`);
+            currentStreak = goalAchievedToday ? 1 : 0; // Начинаем новый, если сегодня выполнили
+            needsDbUpdate = true;
+        }
+      } else {
+        // Последнее обновление было давно или никогда
+        console.log(`[StatsService] ${prefix} - Last update was long ago or never. Resetting streak.`);
+        currentStreak = goalAchievedToday ? 1 : 0; // Начинаем новый, если сегодня выполнили
+        needsDbUpdate = true;
+      }
+
+      // Обновляем максимальный стрик
+      if (currentStreak > maxStreak) {
+          maxStreak = currentStreak;
+          needsDbUpdate = true; // Уже должно быть true, но на всякий случай
+      }
+
+      // 4. Обновляем данные пользователя в БД, если нужно
+      if (needsDbUpdate) {
+          console.log(`[StatsService] ${prefix} - Updating user streak in DB: current=${currentStreak}, max=${maxStreak}, lastUpdate=${now.toISOString()}`);
+          await this.prisma.user.update({
+              where: { id: userId },
+              data: {
+                  currentStreak: currentStreak,
+                  maxStreak: maxStreak,
+                  lastStreakUpdate: now,
+              },
+          });
+      }
+
+      // 5. Возвращаем результат
+      console.log(`[StatsService] ${prefix} - Returning progress: completed=${completedToday}, currentStreak=${currentStreak}, maxStreak=${maxStreak}`);
+      return {
+          completedToday: completedToday,
+          currentStreak: currentStreak,
+          maxStreak: maxStreak,
+      };
+
+    } catch (error) {
+      console.error(`[StatsService] Error in ${prefix}:`, error);
+      // Возвращаем нули в случае ошибки
+      return { completedToday: 0, currentStreak: 0, maxStreak: 0 }; 
     }
   }
 }

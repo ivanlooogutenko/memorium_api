@@ -211,9 +211,14 @@ export class CardsService {
 
   async getDueCards(userId: number, moduleId: number): Promise<Card[]> {
     const prefix = `getDueCards (userId: ${userId}, moduleId: ${moduleId})`;
-    const now = new Date(); 
+    const now = new Date();
+    // Рассчитываем начало следующего дня (00:00:00.000)
+    const tomorrowStart = new Date(now);
+    tomorrowStart.setDate(now.getDate() + 1);
+    tomorrowStart.setHours(0, 0, 0, 0);
+
     try {
-      await this.verifyModuleOwner(userId, moduleId); 
+      await this.verifyModuleOwner(userId, moduleId);
 
       const dueCards = await this.prisma.card.findMany({
         where: {
@@ -224,7 +229,7 @@ export class CardsService {
           schedule: {
             due_date: {
               not: null,
-              lte: now,
+              lt: tomorrowStart, // Используем 'lt' (less than) с началом следующего дня
             },
           },
         },
@@ -548,7 +553,7 @@ export class CardsService {
     const prefix = `reviewCard (cardId: ${cardId}, userId: ${userId})`;
     const now = new Date();
     const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0); // Начало текущего дня
+    todayStart.setHours(0, 0, 0, 0);
 
     try {
       const user = await this.verifyCardOwner(userId, cardId);
@@ -566,8 +571,9 @@ export class CardsService {
       const prismaRating = this.getPrismaReviewRating(reviewDto.rating);
 
       let scheduleUpdateData: Prisma.CardScheduleUpdateInput = {};
-      let logState: CardStatus = currentSchedule.status;
+      const statusBeforeReview = currentSchedule.status; // Сохраняем статус ДО ревью для лога
       let logRating: PrismaReviewRating = prismaRating;
+      let countsTowardsGoal = false; // Инициализируем флаг
 
       const consecutiveGoodCount = currentSchedule.consecutiveGoodCount || 0;
       const lastAnsweredGoodDate = currentSchedule.lastAnsweredGoodDate;
@@ -576,7 +582,6 @@ export class CardsService {
 
       switch (currentSchedule.status) {
         case CardStatus.new:
-          logState = CardStatus.new;
           if (fsrsRating === FsrsRating.Again) {
             scheduleUpdateData = {
               due_date: todayStart, // Остается due сегодня
@@ -601,7 +606,6 @@ export class CardsService {
           break;
 
         case CardStatus.learning:
-          logState = CardStatus.learning;
           nextConsecutiveGoodCount = consecutiveGoodCount;
           nextLastAnsweredGoodDate = lastAnsweredGoodDate;
 
@@ -619,7 +623,7 @@ export class CardsService {
               const { scheduleUpdateData: fsrsUpdate, logData: fsrsLog } = 
                 this.fsrsService.calculateFsrsReview(currentSchedule, fsrsRating, now, user.fsrsParams);
               scheduleUpdateData = { ...fsrsUpdate, consecutiveGoodCount: 0, lastAnsweredGoodDate: null };
-              logState = fsrsLog.state;
+              countsTowardsGoal = true;
             } else {
               // Продолжаем learning, остается due сегодня
               scheduleUpdateData = {
@@ -646,20 +650,23 @@ export class CardsService {
 
         case CardStatus.review:
         case CardStatus.mastered:
-          // Логика FSRS как и раньше
-          logState = currentSchedule.status;
           const { scheduleUpdateData: fsrsUpdate, logData: fsrsLog } = 
             this.fsrsService.calculateFsrsReview(currentSchedule, fsrsRating, now, user.fsrsParams);
           scheduleUpdateData = { ...fsrsUpdate, consecutiveGoodCount: 0, lastAnsweredGoodDate: null };
-          logState = fsrsLog.state;
+          
+          // Засчитываем, если ответ Good или Easy
+          if (fsrsRating === FsrsRating.Good || fsrsRating === FsrsRating.Easy) {
+              countsTowardsGoal = true;
+          }
           break;
 
         default:
-          // Обработка по умолчанию (как review)
           const { scheduleUpdateData: defaultUpdate, logData: defaultLog } = 
             this.fsrsService.calculateFsrsReview(currentSchedule, fsrsRating, now, user.fsrsParams);
           scheduleUpdateData = { ...defaultUpdate, consecutiveGoodCount: 0, lastAnsweredGoodDate: null };
-          logState = defaultLog.state;
+          if (fsrsRating === FsrsRating.Good || fsrsRating === FsrsRating.Easy) {
+              countsTowardsGoal = true;
+          }
           break;
       }
 
@@ -673,9 +680,10 @@ export class CardsService {
           data: {
             user_id: userId,
             card_id: cardId,
-            rating: prismaRating, // Используем prismaRating для лога
-            state: logState, // Статус *до* ревью
+            rating: prismaRating,
+            state: statusBeforeReview,
             review_date: now,
+            countsTowardsGoal: countsTowardsGoal,
           },
         })
       ]);
@@ -686,7 +694,7 @@ export class CardsService {
           include: { schedule: true, examples: true, module: true },
       });
 
-      console.log(`[CardsService] ${prefix} - Card reviewed. New status: ${updatedSchedule.status}, ConsGood: ${updatedSchedule.consecutiveGoodCount}, Due: ${updatedSchedule.due_date?.toISOString() ?? 'N/A'}`);
+      console.log(`[CardsService] ${prefix} - Card reviewed. Counts towards goal: ${countsTowardsGoal}. New status: ${updatedSchedule.status}`);
       return updatedCard as Card;
 
     } catch (error) {
