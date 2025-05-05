@@ -57,7 +57,7 @@ export class CardsService {
   }
 
   getDue(moduleId: number, userId: number) {
-    const now = new Date(); // Get current time for learning cards
+    const now = new Date(); 
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(0, 0, 0, 0);
@@ -67,18 +67,14 @@ export class CardsService {
         module_id: moduleId,
         module: { user_id: userId },
         OR: [
-          // New cards
           { schedule: { status: CardStatus.new } },
-          // Learning cards due now/today 
           { schedule: { status: CardStatus.learning, due_date: { lte: now } } },
-          // Review cards due today or earlier
           { schedule: { status: CardStatus.review, due_date: { lt: tomorrow } } },
         ],
       },
       include: { schedule: true, examples: true },
-      // Optional: Order cards (e.g., new first, then by due date)
       orderBy: [
-         { schedule: { status: 'asc' } }, // new, learning, review
+         { schedule: { status: 'asc' } }, 
          { schedule: { due_date: 'asc' } }
       ]
     });
@@ -206,28 +202,27 @@ export class CardsService {
     const dbRating   = this.toDbRating(dto.rating);
     const { update, log } = this.fsrs.calculate(sched, fsrsRating, now);
 
-    // Prepare log data
+
     const logRating = FsrsService.mapFromFsrsRating(fsrsRating);
 
-    // Determine if this review counts towards the daily goal
+
     const countsTowardsGoal = 
-        (fsrsRating === Rating.Good || fsrsRating === Rating.Easy) && // Must be a good/easy answer
+        (fsrsRating === Rating.Good || fsrsRating === Rating.Easy) && 
         (
             sched.status === CardStatus.review || 
             sched.status === CardStatus.mastered ||
-            (sched.status === CardStatus.learning && log.status === CardStatus.review) // Graduated from learning
+            (sched.status === CardStatus.learning && log.status === CardStatus.review) 
         );
-    console.log(`[FsrsService calculate] Card ID ${sched.card_id}. Counts towards goal: ${countsTowardsGoal}`);
 
-    // Log the review event
+
     await this.prisma.$transaction([
       this.prisma.cardSchedule.update({ where: { card_id: id }, data: update }),
       this.prisma.reviewLog.create({
         data: {
           card_id: id,
           user_id: userId,
-          rating: dbRating, // Use the original DB rating for logging
-          state: sched.status, // Log the state *before* the review
+          rating: dbRating, 
+          state: sched.status, 
           review_date: now,
           countsTowardsGoal: countsTowardsGoal, 
         },

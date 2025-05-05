@@ -6,44 +6,37 @@ import { GlobalProgressDto } from './dto/global-progress.dto';
 import { Prisma, CardStatus } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
 
-// --- New DTO Class for weekly stats ---
 export class WeeklyGlobalStatItemDto {
   @ApiProperty({ example: '2025-05-05', description: 'Date string (YYYY-MM-DD)' })
   date: string;
 
   @ApiProperty({ example: 5, description: 'Number of reviews contributing to the daily goal' })
-  goalReviewsCount: number; // Count reviews contributing to the goal
+  goalReviewsCount: number; 
   
   @ApiProperty({ example: 8, description: 'Total number of any review log entries for the day' })
-  anyReviewsCount: number;  // Count any review log entry
+  anyReviewsCount: number;  
 }
-// --- End New DTO Class ---
+
 
 @Injectable()
 export class StatsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // --- Updated getWeeklyStats for Global Data --- 
   async getWeeklyStats(userId: number): Promise<WeeklyGlobalStatItemDto[]> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    // Calculate start date (Monday of the current week)
     const dayOfWeek = (today.getDay() + 6) % 7; // 0=Mon, 1=Tue, ..., 6=Sun
     const startDate = new Date(today);
     startDate.setDate(today.getDate() - dayOfWeek);
 
-    // Calculate end date (start of the *next* Monday, exclusive for query range)
     const nextMonday = new Date(startDate);
     nextMonday.setDate(startDate.getDate() + 7);
 
-    console.log(`[StatsService getWeeklyStats] Calculating week from ${startDate.toISOString()} to ${nextMonday.toISOString()}`);
-
-    // Fetch all review logs for the user in the calculated date range
     const reviewLogs = await this.prisma.reviewLog.findMany({
       where: {
         user_id: userId,
-        review_date: { gte: startDate, lt: nextMonday }, // Use Monday to next Monday range
+        review_date: { gte: startDate, lt: nextMonday },
       },
       select: {
         review_date: true,
@@ -51,9 +44,6 @@ export class StatsService {
       },
     });
 
-    console.log(`[StatsService getWeeklyStats] Found ${reviewLogs.length} review logs for user ${userId} between ${startDate.toISOString()} and ${nextMonday.toISOString()}`);
-
-    // Process logs to count per day
     const dailyCounts = new Map<string, { goalReviewsCount: number; anyReviewsCount: number }>();
 
     reviewLogs.forEach(log => {
@@ -68,13 +58,11 @@ export class StatsService {
       }
     });
 
-    console.log('[StatsService getWeeklyStats] Daily counts map:', JSON.stringify(Array.from(dailyCounts.entries())));
 
-    // Generate result for the 7 days starting from Monday
     const result: WeeklyGlobalStatItemDto[] = [];
     for (let i = 0; i < 7; i++) {
-      const d = new Date(startDate); // Start from Monday
-      d.setDate(startDate.getDate() + i); // Get the specific day of the week
+      const d = new Date(startDate); 
+      d.setDate(startDate.getDate() + i); 
       const dateStr = d.toISOString().slice(0, 10);
       const counts = dailyCounts.get(dateStr) || { goalReviewsCount: 0, anyReviewsCount: 0 };
       result.push({ date: dateStr, ...counts });
@@ -82,7 +70,6 @@ export class StatsService {
 
     return result;
   }
-  // --- End Updated getWeeklyStats --- 
 
   async getDailyStats(userId: number, filter: StatsFilterDto): Promise<DailyStatItemDto[]> {
     const startDate = filter.fromDate ? new Date(filter.fromDate) : (() => { const d = new Date(); d.setDate(d.getDate() - 6); d.setHours(0,0,0,0); return d; })();
@@ -144,11 +131,10 @@ export class StatsService {
   }
 
   async getModuleStats(userId: number, moduleId: number) {
-    // Note: This uses the old getWeeklyStats logic. Needs update if separate weekly stats per module are needed.
     const weeklyData = await this.prisma.reviewLog.groupBy({ by: ['review_date'], where: { user_id: userId, countsTowardsGoal: true, review_date: { gte: (() => { const d = new Date(); d.setDate(d.getDate() - 6); d.setHours(0,0,0,0); return d; })(), lt: (() => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(0,0,0,0); return d; })() }, card: { module_id: moduleId } }, _count: { review_date: true }, });
     const counts = new Map<string, number>();
     weeklyData.forEach(item => { counts.set(item.review_date.toISOString().slice(0, 10), item._count.review_date); });
-    const weeklyResult: any[] = []; // Replace 'any' with appropriate DTO if defined
+    const weeklyResult: any[] = []; 
     const startDate = (() => { const d = new Date(); d.setDate(d.getDate() - 6); d.setHours(0,0,0,0); return d; })();
     for (let i = 0; i < 7; i++) { const d = new Date(startDate); d.setDate(startDate.getDate() + i); const dateStr = d.toISOString().slice(0, 10); weeklyResult.push({ date: dateStr, reviewsCount: counts.get(dateStr) ?? 0 }); }
 
@@ -160,52 +146,47 @@ export class StatsService {
     return grouped.reduce((acc, item) => ({ ...acc, [item.status]: item._count.status }), {} as Record<string, number>);
   }
 
-  // --- Updated getGlobalDailyProgress --- 
   async getGlobalDailyProgress(userId: number): Promise<GlobalProgressDto> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
 
-    // Get daily goal from user settings
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { dailyGoal: true },
     });
-    // Get count of reviews contributing to the goal today
+
     const completedToday = await this.prisma.reviewLog.count({
       where: { user_id: userId, countsTowardsGoal: true, review_date: { gte: today, lt: tomorrow } },
     });
 
-    // Get all review dates for streak calculation
     const logs = await this.prisma.reviewLog.findMany({
       where: { user_id: userId }, 
       select: { review_date: true },
-      // No distinct needed here, we process all logs
     });
 
-    // --- Use Set of Timestamps for Efficient Lookup --- 
+
     const activityTimestamps = new Set<number>();
     logs.forEach(log => {
         const logDate = new Date(log.review_date);
-        logDate.setHours(0, 0, 0, 0); // Normalize to start of day
+        logDate.setHours(0, 0, 0, 0); 
         activityTimestamps.add(logDate.getTime());
     });
-    // Convert Set to sorted array of timestamps for streak calculation
+
     const sortedTimestamps = Array.from(activityTimestamps).sort((a, b) => a - b);
-    // --- End Timestamp Set ---
+
 
     let maxStreak = 0;
     let current = 0;
     let prevTimestamp: number | null = null;
     const oneDayMillis = 86400000;
 
-    // Calculate max streak using timestamps
     sortedTimestamps.forEach(timestamp => {
       if (prevTimestamp !== null && timestamp === prevTimestamp + oneDayMillis) {
         current++;
       } else {
-        current = 1; // Reset or start streak
+        current = 1; 
       }
       if (current > maxStreak) {
         maxStreak = current;
@@ -213,12 +194,12 @@ export class StatsService {
       prevTimestamp = timestamp;
     });
 
-    // Calculate current streak using timestamps
+
     let currentStreak = 0;
     for (let i = 0; ; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
-      // d already has time 00:00:00:000 because `today` was normalized
+
       const timestampToCheck = d.getTime();
       if (activityTimestamps.has(timestampToCheck)) {
         currentStreak++;
@@ -229,5 +210,4 @@ export class StatsService {
 
     return { completedToday, currentStreak, maxStreak };
   }
-  // --- End Updated getGlobalDailyProgress --- 
 }
