@@ -21,14 +21,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         id: true,
         username: true,
         email: true,
-        interface_language_id: true,
+        dailyGoal: true,
       },
     });
-
-    if (!user) {
-      throw new UnauthorizedException('Пользователь не найден или токен недействителен');
-    }
-
+    if (!user) throw new UnauthorizedException('Неверный токен');
     return user;
   }
-} 
+}

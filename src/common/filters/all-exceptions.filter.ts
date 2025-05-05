@@ -15,77 +15,78 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
-    const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
-    
+    const res = ctx.getResponse<Response>();
+    const req = ctx.getRequest<Request>();
+
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
-    let message = 'Внутренняя ошибка сервера';
-    let error = 'Internal Server Error';
-    let details: any = null;
-
-    // Handle HttpExceptions (NestJS built-in exceptions)
-    if (exception instanceof HttpException) {
-      status = exception.getStatus();
-      const exceptionResponse = exception.getResponse();
-      
-      if (typeof exceptionResponse === 'object') {
-        const exceptionResponseObj = exceptionResponse as any;
-        message = exceptionResponseObj.message || message;
-        error = exceptionResponseObj.error || exception.name;
-        details = exceptionResponseObj.details || null;
-      } else {
-        message = exceptionResponse as string;
-        error = exception.name;
-      }
-    } 
-    // Handle Prisma exceptions
-    else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
-      // Handle unique constraint violations
-      if (exception.code === 'P2002') {
-        status = HttpStatus.CONFLICT;
-        const field = exception.meta?.target as string[];
-        message = `Значение поля ${field?.join(', ')} уже существует`;
-        error = 'Conflict';
-      } 
-      // Handle foreign key constraint violations
-      else if (exception.code === 'P2003') {
-        status = HttpStatus.BAD_REQUEST;
-        message = 'Ссылка на несуществующую запись';
-        error = 'Foreign Key Constraint Violation';
-      }
-      // Handle record not found
-      else if (exception.code === 'P2001' || exception.code === 'P2018') {
-        status = HttpStatus.NOT_FOUND;
-        message = 'Запись не найдена';
-        error = 'Not Found';
-      }
-      details = {
-        code: exception.code,
-        meta: exception.meta,
-      };
-    } 
-    // Handle Prisma validation errors
-    else if (exception instanceof Prisma.PrismaClientValidationError) {
-      status = HttpStatus.BAD_REQUEST;
-      message = 'Ошибка валидации данных';
-      error = 'Validation Error';
-    }
-
-    // Log the error
-    this.logger.error(
-      `${request.method} ${request.url} - ${status} - ${message}`,
-      exception instanceof Error ? exception.stack : 'No stack trace',
-    );
-
-    // Return standardized error response
-    response.status(status).json({
+    let body: any = {
       statusCode: status,
       timestamp: new Date().toISOString(),
-      path: request.url,
-      method: request.method,
-      error,
-      message,
-      details,
-    });
+      path: req.url,
+      method: req.method,
+      error: HttpStatus[status],
+      message: 'Internal Server Error',
+    };
+
+    if (exception instanceof HttpException) {
+      status = exception.getStatus();
+      const resp = exception.getResponse();
+      const data = typeof resp === 'string' ? { message: resp } : (resp as any);
+      body = {
+        ...body,
+        statusCode: status,
+        error: data.error || exception.name,
+        message: data.message || exception.message,
+        details: data.details,
+      };
+    } else if (
+      exception instanceof Prisma.PrismaClientKnownRequestError
+    ) {
+      status = HttpStatus.CONFLICT;
+      let msg = exception.message;
+      let err = exception.code;
+
+      switch (exception.code) {
+        case 'P2002':
+          msg = `Уникальное поле нарушено: ${(exception.meta?.target as string[]).join(', ')}`;
+          err = 'UniqueConstraint';
+          status = HttpStatus.CONFLICT;
+          break;
+        case 'P2003':
+          msg = 'Внешний ключ не найден';
+          err = 'ForeignKeyViolation';
+          status = HttpStatus.BAD_REQUEST;
+          break;
+        case 'P2001':
+        case 'P2018':
+          msg = 'Запись не найдена';
+          err = 'NotFound';
+          status = HttpStatus.NOT_FOUND;
+          break;
+      }
+
+      body = {
+        ...body,
+        statusCode: status,
+        error: err,
+        message: msg,
+        details: { code: exception.code, meta: exception.meta },
+      };
+    } else if (exception instanceof Prisma.PrismaClientValidationError) {
+      status = HttpStatus.BAD_REQUEST;
+      body = {
+        ...body,
+        statusCode: status,
+        error: 'ValidationError',
+        message: exception.message,
+      };
+    }
+
+    this.logger.error(
+      `${req.method} ${req.url} -> ${body.statusCode} ${body.error}: ${body.message}`,
+      exception instanceof Error ? exception.stack : undefined,
+    );
+
+    res.status(body.statusCode).json(body);
   }
-} 
+}

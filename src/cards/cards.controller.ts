@@ -1,214 +1,123 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Param,
-  Query,
-  Body,
-  ParseIntPipe,
-  UseGuards,
-  Request,
-} from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Query, Body, ParseIntPipe, UseGuards, Request, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CardsService } from './cards.service';
 import { CardDto } from './dto/card.dto';
 import { ReviewDto } from './dto/review.dto';
 import { CardStatus } from '@prisma/client';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard'; 
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
-import { PredictedStepDto } from './dto/predicted-schedule.dto';
 
 @ApiTags('cards')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('cards')
 export class CardsController {
-  
-  constructor(private readonly cardsService: CardsService) {}
+  constructor(private readonly service: CardsService) {}
 
-  @ApiOperation({ summary: 'Получить все карточки' })
-  @ApiResponse({ status: 200, description: 'Список всех карточек' })
   @Get()
-  getAllCards(@Request() req) {
-    return this.cardsService.getAllCards(req.user.id);
+  @ApiOperation({ summary: 'Получить все карточки пользователя' })
+  getAll(@Request() req) {
+    return this.service.getAll(req.user.id);
   }
 
-  @ApiOperation({ summary: 'Создать новую карточку' })
-  @ApiResponse({ status: 201, description: 'Карточка успешно создана' })
-  @Post()
-  createCard(@Request() req, @Body() createCardDto: CardDto) {
-    return this.cardsService.createCard(createCardDto, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Поиск карточек по тексту' })
-  @ApiQuery({ name: 'query', description: 'Поисковый запрос', required: true })
-  @ApiResponse({ status: 200, description: 'Список найденных карточек' })
-  @Get('search')
-  searchCards(@Request() req, @Query('query') query: string) {
-    return this.cardsService.searchCards(query, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Получить карточки по ID модуля' })
-  @ApiParam({ name: 'moduleId', description: 'ID модуля', required: true })
-  @ApiResponse({ status: 200, description: 'Список карточек модуля' })
-  @Get('module/:moduleId')
-  getCardsByModule(
-    @Request() req,
-    @Param('moduleId', ParseIntPipe) moduleId: number
-  ) {
-    return this.cardsService.getCardsByModule(moduleId, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Удалить все карточки модуля' })
-  @ApiParam({ name: 'moduleId', description: 'ID модуля', required: true })
-  @ApiResponse({ status: 200, description: 'Карточки успешно удалены' })
-  @Delete('module/:moduleId')
-  deleteAllCardsByModule(
-    @Request() req,
-    @Param('moduleId', ParseIntPipe) moduleId: number
-  ) {
-    return this.cardsService.deleteAllCardsByModule(moduleId, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Получить карточку по ID' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'Данные карточки' })
-  @ApiResponse({ status: 404, description: 'Карточка не найдена' })
   @Get(':id')
-  async getCardById(
-    @Request() req,
-    @Param('id', ParseIntPipe) id: number
-  ) {
-    return this.cardsService.getCardById(id, req.user.id);
+  @ApiOperation({ summary: 'Получить карточку по ID' })
+  @ApiParam({ name: 'id', description: 'ID карточки' })
+  getById(@Request() req, @Param('id', ParseIntPipe) id: number) {
+    return this.service.getById(id, req.user.id);
   }
 
-  @ApiOperation({ summary: 'Получить историю и расписание карточки' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'История и текущее расписание карточки' })
-  @ApiResponse({ status: 404, description: 'Карточка не найдена' })
-  @Get(':id/history')
-  async getCardHistory(
-    @Request() req,
-    @Param('id', ParseIntPipe) id: number
-  ) {
-    const userId = req.user.id;
-    return this.cardsService.getCardHistory(id, userId);
+  @Get('search')
+  @ApiOperation({ summary: 'Поиск карточек по тексту' })
+  @ApiQuery({ name: 'query', required: true })
+  search(@Request() req, @Query('query') q: string) {
+    return this.service.search(q, req.user.id);
   }
 
-  @ApiOperation({ summary: 'Обновить карточку' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'Карточка успешно обновлена' })
-  @ApiResponse({ status: 404, description: 'Карточка не найдена' })
-  @Put(':id')
-  updateCard(
-    @Request() req,
-    @Param('id', ParseIntPipe) id: number, 
-    @Body() updateCardDto: CardDto
-  ) {
-    return this.cardsService.updateCard(id, updateCardDto, req.user.id);
+  @Get('module/:m')
+  @ApiOperation({ summary: 'Карточки модуля' })
+  @ApiParam({ name: 'm', description: 'ID модуля' })
+  getByModule(@Request() req, @Param('m', ParseIntPipe) module: number) {
+    return this.service.getByModule(module, req.user.id);
   }
 
-  @ApiOperation({ summary: 'Удалить карточку' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'Карточка успешно удалена' })
-  @ApiResponse({ status: 404, description: 'Карточка не найдена' })
-  @Delete(':id')
-  deleteCard(
+  @Get('module/:m/status/:status')
+  @ApiOperation({ summary: 'Получить карточки модуля по статусу' })
+  @ApiParam({ name: 'm', description: 'ID модуля' })
+  @ApiParam({ name: 'status', description: 'Статус карточки (new, learning, review, mastered)', enum: CardStatus })
+  @ApiQuery({ name: 'date', description: 'Фильтр по дате (YYYY-MM-DD), актуально для learning/review (включительно)', required: false })
+  getByStatus(
     @Request() req,
-    @Param('id', ParseIntPipe) id: number
-  ) {
-    return this.cardsService.deleteCard(id, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Загрузить изображение для карточки' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'Изображение успешно загружено' })
-  @Post(':id/image')
-  uploadImage(
-    @Request() req,
-    @Param('id', ParseIntPipe) id: number
-  ) {
-    return this.cardsService.uploadImage(id, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Удалить изображение карточки' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'Изображение успешно удалено' })
-  @Delete(':id/image')
-  deleteImage(
-    @Request() req,
-    @Param('id', ParseIntPipe) id: number
-  ) {
-    return this.cardsService.deleteImage(id, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Получить карточки по статусу' })
-  @ApiParam({ name: 'moduleId', description: 'ID модуля', required: true })
-  @ApiParam({ name: 'status', description: 'Статус карточки', required: true, enum: CardStatus })
-  @ApiQuery({ name: 'date', description: 'Дата для фильтрации (YYYY-MM-DD)', required: false })
-  @ApiResponse({ status: 200, description: 'Список карточек с указанным статусом' })
-  @Get('module/:moduleId/status/:status')
-  getCardsByStatus(
-    @Request() req,
-    @Param('moduleId', ParseIntPipe) moduleId: number,
-    @Param('status') status: CardStatus,
+    @Param('m', ParseIntPipe) module: number,
+    @Param('status') status: string,
     @Query('date') date?: string,
   ) {
-    return this.cardsService.getCardsByStatus(moduleId, status, date, req.user.id);
+    const validStatuses = Object.values(CardStatus);
+    if (!validStatuses.includes(status as CardStatus)) {
+      throw new BadRequestException(`Неверный статус: ${status}. Допустимые значения: ${validStatuses.join(', ')}`);
+    }
+    return this.service.getByStatus(module, status as CardStatus, req.user.id, date);
   }
 
-  @ApiOperation({ summary: 'Отправить оценку карточки (повторение)' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'Повторение успешно обработано' })
+  @Get('module/:m/due')
+  @ApiOperation({ summary: 'Карточки к повторению' })
+  @ApiParam({ name: 'm', description: 'ID модуля' })
+  getDue(@Request() req, @Param('m', ParseIntPipe) module: number) {
+    return this.service.getDue(module, req.user.id);
+  }
+
+  @Post()
+  @ApiOperation({ summary: 'Создать новую карточку' })
+  create(@Request() req, @Body() dto: CardDto) {
+    return this.service.create(dto, req.user.id);
+  }
+
+  @Put(':id')
+  @ApiOperation({ summary: 'Обновить карточку' })
+  @ApiParam({ name: 'id', description: 'ID карточки' })
+  update(
+    @Request() req,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CardDto,
+  ) {
+    return this.service.update(id, dto, req.user.id);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Удалить карточку' })
+  @ApiParam({ name: 'id', description: 'ID карточки' })
+  delete(@Request() req, @Param('id', ParseIntPipe) id: number) {
+    return this.service.delete(id, req.user.id);
+  }
+
+  @Delete('module/:m')
+  @ApiOperation({ summary: 'Удалить все карточки модуля' })
+  @ApiParam({ name: 'm', description: 'ID модуля' })
+  deleteAllCardsByModule(@Request() req, @Param('m', ParseIntPipe) module: number) {
+    return this.service.deleteAllCardsByModule(module, req.user.id);
+  }
+
+  @Get(':id/history')
+  @ApiOperation({ summary: 'Получить историю повторений карточки' })
+  @ApiParam({ name: 'id', description: 'ID карточки' })
+  getHistory(@Request() req, @Param('id', ParseIntPipe) id: number) {
+    return this.service.getHistory(id, req.user.id);
+  }
+
   @Post(':id/review')
-  reviewCard(
+  @ApiOperation({ summary: 'Оценить карточку' })
+  @ApiParam({ name: 'id', description: 'ID карточки' })
+  review(
     @Request() req,
     @Param('id', ParseIntPipe) id: number,
-    @Body() reviewDto: ReviewDto,
+    @Body() dto: ReviewDto,
   ) {
-    return this.cardsService.reviewCard(id, reviewDto, req.user.id);
+    return this.service.review(id, dto, req.user.id);
   }
 
-  @ApiOperation({ summary: 'Сбросить прогресс изучения карточки' })
-  @ApiParam({ name: 'id', description: 'ID карточки', required: true })
-  @ApiResponse({ status: 200, description: 'Прогресс успешно сброшен' })
   @Post(':id/reset')
-  resetCardProgress(
-    @Request() req,
-    @Param('id', ParseIntPipe) id: number
-  ) {
-    return this.cardsService.resetCardProgress(id, req.user.id);
+  @ApiOperation({ summary: 'Сбросить прогресс карточки' })
+  @ApiParam({ name: 'id', description: 'ID карточки' })
+  reset(@Request() req, @Param('id', ParseIntPipe) id: number) {
+    return this.service.reset(id, req.user.id);
   }
-
-  @ApiOperation({ summary: 'Получить карточки модуля для повторения (due)' })
-  @ApiParam({ name: 'moduleId', description: 'ID модуля', required: true, type: Number })
-  @ApiResponse({ status: 200, description: 'Список карточек к повторению для данного модуля' })
-  @Get('module/:moduleId/due')
-  getDueCards(
-    @Request() req, 
-    @Param('moduleId', ParseIntPipe) moduleId: number
-  ) {
-    const userId = req.user.id;
-    return this.cardsService.getDueCards(userId, moduleId);
-  }
-
-  /*
-  @Get(':id/predict-schedule')
-  @ApiOperation({ summary: 'Спрогнозировать расписание карточки (при оценке "good")' })
-  @ApiParam({ name: 'id', description: 'ID карточки', type: Number })
-  @ApiQuery({ name: 'steps', description: 'Количество шагов прогноза', required: false, type: Number })
-  @ApiResponse({ status: 200, description: 'Прогноз расписания успешно сгенерирован', type: [PredictedStepDto] })
-  @ApiResponse({ status: 403, description: 'Доступ запрещен' })
-  @ApiResponse({ status: 404, description: 'Карточка не найдена' })
-  predictSchedule(
-    @Request() req,
-    @Param('id', ParseIntPipe) id: number,
-    @Query('steps', new ParseIntPipe({ optional: true })) steps?: number
-  ) {
-    const userId = req.user.id;
-    // return this.cardsService.predictSchedule(id, userId, steps);
-    throw new Error('Endpoint not available'); // Или возвращаем ошибку
-  }
-  */
 }

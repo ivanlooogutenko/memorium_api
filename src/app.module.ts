@@ -1,6 +1,4 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { CardsModule } from './cards/cards.module';
 import { ExamplesModule } from './examples/examples.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -21,7 +19,7 @@ import { StatsModule } from './stats/stats.module';
     AuthModule, 
     StatsModule
   ],
-  controllers: [AppController],
-  providers: [AppService],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}
