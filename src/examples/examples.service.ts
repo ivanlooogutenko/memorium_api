@@ -36,7 +36,6 @@ export class ExamplesService {
         card_id: cardId,
         example_text: dto.example_text,
         translation_text: dto.translation_text ?? null,
-        tts_audio_url: dto.tts_audio_url ?? null,
         example_order: order,
       },
     });
@@ -51,7 +50,6 @@ export class ExamplesService {
       data: {
         example_text: dto.example_text,
         translation_text: dto.translation_text ?? null,
-        tts_audio_url: dto.tts_audio_url ?? null,
         example_order: dto.example_order ?? ex.example_order,
       },
     });

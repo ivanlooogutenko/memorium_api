@@ -22,6 +22,8 @@ model User {
   modules        Module[]
   reviews         ReviewLog[]
   stats             DailyStats[]
+  role                UserRole      @default(USER)
+  isBlocked           Boolean       @default(false)
 }
 
 model Language {
@@ -54,8 +56,6 @@ model Card {
   module_id      Int
   front_text     String
   back_text      String
-  image_url      String?
-  tts_audio_url  String?
   created_at     DateTime @default(now())
 
   module         Module @relation(fields: [module_id], references: [id], onDelete: Cascade)
@@ -72,7 +72,6 @@ model Example {
   card_id          Int
   example_text     String
   translation_text String?
-  tts_audio_url   String?
   example_order    Int     @default(1)
 
   card            Card @relation(fields: [card_id], references: [id], onDelete: Cascade)
@@ -146,4 +145,9 @@ model DailyStats {
 
   @@id([user_id, module_id, stat_date])
   @@index([stat_date])
+}
+
+enum UserRole {
+  USER
+  ADMIN
 }

@@ -3,8 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DailyStatItemDto } from './dto/daily-stat-item.dto';
 import { StatsFilterDto } from './dto/stats-filter.dto';
 import { GlobalProgressDto } from './dto/global-progress.dto';
-import { Prisma, CardStatus } from '@prisma/client';
+import { Prisma, CardStatus, UserRole } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
+import { ForbiddenException } from '@nestjs/common';
 
 export class WeeklyGlobalStatItemDto {
   @ApiProperty({ example: '2025-05-05', description: 'Date string (YYYY-MM-DD)' })
@@ -17,6 +18,16 @@ export class WeeklyGlobalStatItemDto {
   anyReviewsCount: number;  
 }
 
+export class GlobalAppStatsDto {
+  @ApiProperty({ example: 150, description: 'Total number of users' })
+  totalUsers: number;
+
+  @ApiProperty({ example: 300, description: 'Total number of modules' })
+  totalModules: number;
+
+  @ApiProperty({ example: 5000, description: 'Total number of cards' })
+  totalCards: number;
+}
 
 @Injectable()
 export class StatsService {
@@ -209,5 +220,29 @@ export class StatsService {
     }
 
     return { completedToday, currentStreak, maxStreak };
+  }
+
+  async getGlobalStatsForAdmin() {
+    const totalUsers = await this.prisma.user.count();
+    const totalModules = await this.prisma.module.count();
+    const totalCards = await this.prisma.card.count();
+    // Можно добавить другие глобальные метрики, если нужно
+    return { totalUsers, totalModules, totalCards };
+  }
+
+  async getGlobalAppStats(requestingUserRole: UserRole): Promise<GlobalAppStatsDto> {
+    if (requestingUserRole !== UserRole.ADMIN) {
+      throw new ForbiddenException('Access denied.');
+    }
+
+    const totalUsers = await this.prisma.user.count();
+    const totalModules = await this.prisma.module.count();
+    const totalCards = await this.prisma.card.count();
+
+    return {
+      totalUsers,
+      totalModules,
+      totalCards,
+    };
   }
 }

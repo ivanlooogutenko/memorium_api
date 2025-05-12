@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ModuleDto } from './dto/module.dto';
-import { Module as ModuleEntity, Language, CardStatus, Prisma } from '@prisma/client';
+import { Module as ModuleEntity, Language, CardStatus, Prisma, UserRole } from '@prisma/client';
 import { LanguageDto } from './dto/language.dto';
 
 export interface ModuleCardStatsCalculated {
@@ -145,5 +145,28 @@ export class ModulesService {
       },
     });
     return languages;
+  }
+
+  async getModulesByUserIdForAdmin(
+    targetUserId: number,
+    requestingUserRole: UserRole,
+  ): Promise<(ModuleEntity & { language: Language, user: { username: string } })[]> {
+    if (requestingUserRole !== UserRole.ADMIN) {
+      throw new ForbiddenException('Access denied. Admins only.');
+    }
+
+    const targetUser = await this.prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!targetUser) {
+      throw new NotFoundException(`User with ID ${targetUserId} not found.`);
+    }
+
+    return this.prisma.module.findMany({
+      where: { user_id: targetUserId },
+      include: {
+        language: true,
+        user: { select: { username: true } },
+      },
+      orderBy: { created_at: 'desc' },
+    });
   }
 }

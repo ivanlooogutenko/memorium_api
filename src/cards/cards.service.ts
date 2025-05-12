@@ -1,13 +1,15 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CardDto } from './dto/card.dto';
 import { ReviewDto } from './dto/review.dto';
-import { CardStatus, Prisma, Example, ReviewRating } from '@prisma/client';
+import { CardStatus, Prisma, Example, ReviewRating, UserRole } from '@prisma/client';
 import { FsrsService } from './fsrs.service';
 import { Rating } from 'ts-fsrs';
 
 @Injectable()
 export class CardsService {
+  private readonly logger = new Logger(CardsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly fsrs: FsrsService,
@@ -40,6 +42,23 @@ export class CardsService {
     if (card.module.user_id !== userId) {
       throw new ForbiddenException();
     }
+  }
+
+  private async ensureModuleExistsForAdmin(moduleId: number, requestingUserRole: UserRole) {
+    this.logger.log(`Admin check: Verifying existence of module with ID: ${moduleId}`);
+    if (requestingUserRole !== UserRole.ADMIN) {
+      this.logger.warn(`Admin check: Non-admin user (role: ${requestingUserRole}) attempted to access admin-only module check.`);
+      throw new ForbiddenException('Access denied. Admins only.');
+    }
+    const module = await this.prisma.module.findUnique({
+      where: { id: moduleId },
+    });
+    if (!module) {
+      this.logger.warn(`Admin check: Module with ID ${moduleId} not found in DB.`);
+      throw new NotFoundException(`Модуль ${moduleId} не найден.`);
+    }
+    this.logger.log(`Admin check: Module with ID ${moduleId} found.`);
+    return module;
   }
 
   getAll(userId: number) {
@@ -100,11 +119,9 @@ export class CardsService {
         module_id: moduleId,
         front_text: dto.front_text,
         back_text: dto.back_text,
-        image_url: dto.image_url || null,
-        tts_audio_url: dto.tts_audio_url || null,
         examples: dto.examples?.length
           ? { createMany: { data: dto.examples.map((ex, i) => ({
-              example_text: ex.example_text,
+              example_text: ex.example_text!,
               translation_text: ex.translation_text || null,
               example_order: i + 1,
             })) } }
@@ -120,7 +137,7 @@ export class CardsService {
     await this.ensureOwner(id, userId);
     const moduleId = +dto.module_id;
     const examples = dto.examples?.map((ex, i) => ({
-      example_text: ex.example_text,
+      example_text: ex.example_text!,
       translation_text: ex.translation_text || null,
       example_order: i + 1,
     })) || [];
@@ -132,8 +149,6 @@ export class CardsService {
           module_id: moduleId,
           front_text: dto.front_text,
           back_text: dto.back_text,
-          image_url: dto.image_url,
-          tts_audio_url: dto.tts_audio_url,
         },
         include: { schedule: true },
       });
@@ -306,5 +321,23 @@ export class CardsService {
       schedule: schedule,
       history: history,
     };
+  }
+
+  async getCardsByModuleForAdmin(
+    moduleId: number,
+    requestingUserRole: UserRole,
+  ) {
+    this.logger.log(`Admin action: Attempting to get cards for module ID: ${moduleId} by user with role: ${requestingUserRole}`);
+    await this.ensureModuleExistsForAdmin(moduleId, requestingUserRole);
+    this.logger.log(`Admin action: Module ${moduleId} confirmed to exist. Fetching cards.`);
+    return this.prisma.card.findMany({
+      where: { module_id: moduleId },
+      include: { 
+        schedule: true, 
+        examples: true, 
+        module: { select: { user: { select: { username: true }} } } 
+      },
+      orderBy: { created_at: 'desc' }, 
+    });
   }
 }

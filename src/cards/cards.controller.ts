@@ -1,10 +1,11 @@
 import { Controller, Get, Post, Put, Delete, Param, Query, Body, ParseIntPipe, UseGuards, Request, BadRequestException } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CardsService } from './cards.service';
 import { CardDto } from './dto/card.dto';
 import { ReviewDto } from './dto/review.dto';
-import { CardStatus } from '@prisma/client';
+import { CardStatus, UserRole } from '@prisma/client';
+import { AdminGuard } from '../auth/guards/admin.guard';
 
 @ApiTags('cards')
 @ApiBearerAuth()
@@ -119,5 +120,20 @@ export class CardsController {
   @ApiParam({ name: 'id', description: 'ID карточки' })
   reset(@Request() req, @Param('id', ParseIntPipe) id: number) {
     return this.service.reset(id, req.user.id);
+  }
+
+  // --- Admin Endpoints for Cards ---
+  @UseGuards(AdminGuard) 
+  @Get('admin/modules/:moduleId/cards')
+  @ApiOperation({ summary: '[ADMIN] Получить все карточки указанного модуля' })
+  @ApiParam({ name: 'moduleId', description: 'ID модуля, чьи карточки нужно получить', type: Number })
+  @ApiResponse({ status: 200, description: 'Список карточек модуля' })
+  @ApiResponse({ status: 403, description: 'Доступ запрещен' })
+  @ApiResponse({ status: 404, description: 'Модуль не найден' })
+  async getCardsByModuleForAdmin(
+    @Request() req,
+    @Param('moduleId', ParseIntPipe) moduleId: number,
+  ) {
+    return this.service.getCardsByModuleForAdmin(moduleId, req.user.role as UserRole);
   }
 }

@@ -22,9 +22,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         username: true,
         email: true,
         dailyGoal: true,
+        role: true,
+        isBlocked: true,
       },
     });
-    if (!user) throw new UnauthorizedException('Неверный токен');
-    return user;
+    if (!user || user.isBlocked) {
+      throw new UnauthorizedException('Неверный токен или пользователь заблокирован.');
+    }
+    return { id: user.id, username: user.username, role: user.role };
   }
 }

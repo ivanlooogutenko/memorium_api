@@ -1,32 +1,34 @@
-import { IsString, IsOptional, IsNotEmpty, IsUrl, MaxLength, MinLength, ValidateNested, IsArray, ArrayMaxSize } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, IsArray, ValidateNested, IsNumber, IsUrl } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export class ExampleDto {
-  @ApiProperty() @IsNotEmpty() @IsString() @MaxLength(500)
-  example_text: string;
+export class ExampleCardDto {
+  @ApiPropertyOptional({ description: 'Текст примера' })
+  @IsOptional() @IsString()
+  example_text?: string;
 
-  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(500)
+  @ApiPropertyOptional({ description: 'Перевод примера' })
+  @IsOptional() @IsString()
   translation_text?: string;
 }
 
 export class CardDto {
-  @ApiProperty() @IsNotEmpty() @IsString()
-  module_id: string;
+  @ApiProperty({ description: 'ID модуля, к которому относится карточка' })
+  @IsNumber()
+  module_id: number;
 
-  @ApiProperty() @IsNotEmpty() @IsString() @MinLength(1) @MaxLength(255)
+  @ApiProperty({ description: 'Текст на передней стороне карточки' })
+  @IsNotEmpty() @IsString()
   front_text: string;
 
-  @ApiProperty() @IsNotEmpty() @IsString() @MinLength(1) @MaxLength(255)
+  @ApiProperty({ description: 'Текст на задней стороне карточки' })
+  @IsNotEmpty() @IsString()
   back_text: string;
 
-  @ApiProperty({ required: false }) @IsOptional() @IsString() @IsUrl()
-  image_url?: string;
-
-  @ApiProperty({ required: false }) @IsOptional() @IsString() @IsUrl()
-  tts_audio_url?: string;
-
-  @ApiProperty({ type: [ExampleDto], required: false })
-  @IsOptional() @IsArray() @ArrayMaxSize(10) @ValidateNested({ each: true }) @Type(() => ExampleDto)
-  examples?: ExampleDto[];
+  @ApiPropertyOptional({ type: [ExampleCardDto], description: 'Список примеров использования' })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ExampleCardDto)
+  examples?: ExampleCardDto[];
 }

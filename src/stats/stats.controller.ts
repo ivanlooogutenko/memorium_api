@@ -1,10 +1,12 @@
 import { Controller, Get, Query, UseGuards, Request, ValidationPipe, ParseIntPipe } from '@nestjs/common';
-import { StatsService, WeeklyGlobalStatItemDto } from './stats.service';
+import { StatsService, WeeklyGlobalStatItemDto, GlobalAppStatsDto } from './stats.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { StatsFilterDto } from './dto/stats-filter.dto';
 import { DailyStatItemDto } from './dto/daily-stat-item.dto';
 import { GlobalProgressDto } from './dto/global-progress.dto';
+import { UserRole } from '@prisma/client';
 
 @ApiTags('stats')
 @ApiBearerAuth()
@@ -73,5 +75,13 @@ export class StatsController {
   @ApiResponse({ status: 200, type: GlobalProgressDto })
   async getGlobalDailyProgress(@Request() req): Promise<GlobalProgressDto> {
     return this.statsService.getGlobalDailyProgress(req.user.id);
+  }
+
+  @UseGuards(AdminGuard)
+  @Get('admin/global-app-stats')
+  @ApiOperation({ summary: '[ADMIN] Get global application statistics' })
+  @ApiResponse({ status: 200, description: 'Global application statistics', type: GlobalAppStatsDto })
+  async getGlobalAppStats(@Request() req): Promise<GlobalAppStatsDto> {
+    return this.statsService.getGlobalAppStats(req.user.role as UserRole);
   }
 }
